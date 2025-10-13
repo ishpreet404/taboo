@@ -274,24 +274,44 @@ io.on("connection", (socket) => {
 			const playerIndex = room.players.findIndex((p) => p.id === socket.id);
 			if (playerIndex !== -1) {
 				const wasHost = room.host === socket.id;
+				const disconnectedPlayer = room.players[playerIndex];
 				room.players.splice(playerIndex, 1);
 
-				// If host left, close the entire room
-				if (wasHost) {
-					// Notify all players that host left and room is closing
-					io.to(roomCode).emit("host-left", {
-						message: "Host has left. Room is closing.",
+				// If host left, assign a new host from remaining players
+				if (wasHost && room.players.length > 0) {
+					room.host = room.players[0].id;
+					console.log(
+						`New host assigned in room ${roomCode}: ${room.players[0].name}`
+					);
+					io.to(roomCode).emit("host-changed", {
+						newHost: room.players[0].name,
+						hostId: room.players[0].id,
+						room,
 					});
-					// Delete the room
-					gameRooms.delete(roomCode);
-					console.log(`Room ${roomCode} deleted (host left)`);
-				} else if (room.players.length === 0) {
+				}
+
+				if (room.players.length === 0) {
 					// If room is empty, delete it
 					gameRooms.delete(roomCode);
 					console.log(`Room ${roomCode} deleted (empty)`);
 				} else {
+					// Remove player from teams if game has started
+					if (room.gameState) {
+						room.gameState.teams.forEach((team) => {
+							const teamPlayerIndex = team.players.indexOf(
+								disconnectedPlayer.name
+							);
+							if (teamPlayerIndex !== -1) {
+								team.players.splice(teamPlayerIndex, 1);
+							}
+						});
+					}
 					// Regular player left, notify others
-					io.to(roomCode).emit("player-left", { socketId: socket.id, room });
+					io.to(roomCode).emit("player-left", {
+						socketId: socket.id,
+						playerName: disconnectedPlayer.name,
+						room,
+					});
 				}
 			}
 		});
