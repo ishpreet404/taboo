@@ -14,6 +14,7 @@ A modern, real-time multiplayer word guessing game built with **Next.js**, **Soc
 ### 🎲 Game Mechanics
 - **Typing-based guessing**: Players type words to guess them (no clicking!)
 - **Auto-recognition**: Instant word validation as you type
+- **Massive word database**: **3,259 words** across all difficulty levels!
 - **Dynamic word pool**: Words auto-expand as teams progress
 - **Smart scoring system**:
   - Easy words: 8-11 points (green)
@@ -263,15 +264,17 @@ turnTime: 60,        // Seconds per turn
 ```
 
 ### Add More Words
-Edit `frontend/components/GameScreen.tsx` - add to `wordDatabase`:
+The game includes **3,259 words** from `wordlist.txt`!
+
+To customize, edit `frontend/lib/wordDatabase.ts`:
 ```typescript
-{ 
-  word: 'EXAMPLE', 
-  taboo: ['WORD1', 'WORD2', 'WORD3', 'WORD4', 'WORD5'], 
-  difficulty: 'easy', 
-  points: 10 
+const relatedWords: Record<string, string[]> = {
+  'YOUR_WORD': ['TABOO1', 'TABOO2', 'TABOO3', 'TABOO4', 'TABOO5'],
+  // Add custom taboo words for better gameplay!
 }
 ```
+
+See **WORDS.md** for complete word database documentation.
 
 ### Customize Styling
 - Edit `frontend/tailwind.config.ts` for theme colors

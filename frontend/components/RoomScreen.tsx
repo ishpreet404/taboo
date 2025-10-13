@@ -40,9 +40,10 @@ export default function RoomScreen() {
             transition={{ type: 'spring', stiffness: 200 }}
             className="text-6xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent"
           >
-            🎯 TABOO
+             TABOO
           </motion.h1>
-          <p className="text-gray-300 text-lg">Multiplayer Word Guessing Game</p>
+                  <p className="text-gray-300 text-lg">Inferno ne banayi hai 
+          </p>
           
           {/* Connection Status */}
           <div className="flex items-center justify-center gap-2 mt-4">

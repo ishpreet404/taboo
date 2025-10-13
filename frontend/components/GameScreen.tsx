@@ -4,22 +4,7 @@ import { useState, useEffect } from 'react'
 import { useGame } from './GameContext'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Clock, Trophy, Zap, SkipForward } from 'lucide-react'
-
-const wordDatabase = [
-  { word: 'TOMORROW', taboo: ['DAY', 'NEXT', 'FUTURE', 'AFTER', 'TODAY'], difficulty: 'easy', points: 10 },
-  { word: 'EYE', taboo: ['SEE', 'VISION', 'LOOK', 'SIGHT', 'WATCH'], difficulty: 'easy', points: 10 },
-  { word: 'CAPTAIN', taboo: ['SHIP', 'LEADER', 'BOAT', 'COMMANDER', 'SAILOR'], difficulty: 'easy', points: 11 },
-  { word: 'TABLET', taboo: ['IPAD', 'DEVICE', 'SCREEN', 'COMPUTER', 'TECH'], difficulty: 'easy', points: 17 },
-  { word: 'SMILE', taboo: ['HAPPY', 'FACE', 'LAUGH', 'GRIN', 'TEETH'], difficulty: 'easy', points: 8 },
-  { word: 'TEETH', taboo: ['MOUTH', 'BITE', 'DENTAL', 'WHITE', 'BRUSH'], difficulty: 'easy', points: 7 },
-  { word: 'DECEPTION', taboo: ['LIE', 'TRICK', 'FAKE', 'FOOL', 'DECEIVE'], difficulty: 'hard', points: 28, rare: 'rare' },
-  { word: 'TYPICAL', taboo: ['NORMAL', 'USUAL', 'COMMON', 'AVERAGE', 'REGULAR'], difficulty: 'medium', points: 25, rare: 'very-rare' },
-  { word: 'TORRENT', taboo: ['FLOOD', 'RUSH', 'STREAM', 'DOWNLOAD', 'WATER'], difficulty: 'medium', points: 28, rare: 'very-rare' },
-  { word: 'DEMOCRACY', taboo: ['VOTE', 'GOVERNMENT', 'PEOPLE', 'ELECTION', 'FREEDOM'], difficulty: 'medium', points: 15 },
-  { word: 'TELESCOPE', taboo: ['STARS', 'SPACE', 'LOOK', 'ASTRONOMY', 'LENS'], difficulty: 'medium', points: 15 },
-  { word: 'METAMORPHOSIS', taboo: ['CHANGE', 'BUTTERFLY', 'TRANSFORM', 'CATERPILLAR', 'EVOLUTION'], difficulty: 'hard', points: 20 },
-  { word: 'PHILOSOPHY', taboo: ['THINK', 'WISDOM', 'QUESTION', 'LOGIC', 'MEANING'], difficulty: 'hard', points: 30, rare: 'rare' },
-]
+import { wordDatabase } from '@/lib/wordDatabase'
 
 export default function GameScreen() {
   const { gameState, socket, roomCode, playerName } = useGame()
