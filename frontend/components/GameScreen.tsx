@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useGame } from './GameContext'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Clock, Trophy, Zap, SkipForward, Home, LogOut } from 'lucide-react'
+import { Clock, Trophy, Zap, LogOut } from 'lucide-react'
 import { wordDatabase } from '@/lib/wordDatabase'
 
 export default function GameScreen() {
@@ -11,7 +11,6 @@ export default function GameScreen() {
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
-  const [skippedWords, setSkippedWords] = useState<any[]>([])
   const [guess, setGuess] = useState('')
   const [timeRemaining, setTimeRemaining] = useState(60)
   const [turnActive, setTurnActive] = useState(false)
@@ -32,10 +31,6 @@ export default function GameScreen() {
       }
     }
 
-    const handleWordSkipped = (data: any) => {
-      // Update local state with server data
-    }
-
     const handleTurnEnded = (data: any) => {
       setTurnActive(false)
       setGamePhase('turn-end')
@@ -44,7 +39,6 @@ export default function GameScreen() {
     const handleNextTurn = (data: any) => {
       setGamePhase('turn-start')
       setGuessedWords([])
-      setSkippedWords([])
       setTimeRemaining(60)
     }
 
@@ -52,18 +46,23 @@ export default function GameScreen() {
       setTimeRemaining(data.timeRemaining)
     }
 
+    const handleHostLeft = () => {
+      alert('Host has left. Room is closing.')
+      leaveGame()
+    }
+
     socket.on('word-guessed-sync', handleWordGuessed)
-    socket.on('word-skipped-sync', handleWordSkipped)
     socket.on('turn-ended', handleTurnEnded)
     socket.on('next-turn-sync', handleNextTurn)
     socket.on('timer-sync', handleTimerSync)
+    socket.on('host-left', handleHostLeft)
 
     return () => {
       socket.off('word-guessed-sync', handleWordGuessed)
-      socket.off('word-skipped-sync', handleWordSkipped)
       socket.off('turn-ended', handleTurnEnded)
       socket.off('next-turn-sync', handleNextTurn)
       socket.off('timer-sync', handleTimerSync)
+      socket.off('host-left', handleHostLeft)
     }
   }, [socket])
 
@@ -92,7 +91,6 @@ export default function GameScreen() {
     const words = selectWords(10)
     setCurrentWords(words)
     setGuessedWords([])
-    setSkippedWords([])
     setTimeRemaining(60)
     setTurnActive(true)
     setGamePhase('playing')
@@ -107,7 +105,7 @@ export default function GameScreen() {
     if (input.length === 0) return
 
     for (const wordObj of currentWords) {
-      if (guessedWords.includes(wordObj) || skippedWords.includes(wordObj)) continue
+      if (guessedWords.includes(wordObj)) continue
 
       if (input === wordObj.word) {
         const newGuessed = [...guessedWords, wordObj]
@@ -123,20 +121,10 @@ export default function GameScreen() {
         })
         
         // Add more words if running low
-        const remaining = currentWords.length - newGuessed.length - skippedWords.length
+        const remaining = currentWords.length - newGuessed.length
         if (remaining <= 2) {
           setCurrentWords([...currentWords, ...selectWords(5)])
         }
-        break
-      }
-    }
-  }
-
-  const skipWord = () => {
-    for (const wordObj of currentWords) {
-      if (!guessedWords.includes(wordObj) && !skippedWords.includes(wordObj)) {
-        setSkippedWords([...skippedWords, wordObj])
-        socket?.emit('word-skipped', { roomCode, word: wordObj.word })
         break
       }
     }
@@ -146,11 +134,11 @@ export default function GameScreen() {
     setTurnActive(false)
     setGamePhase('turn-end')
     
-    const totalPoints = guessedWords.reduce((sum, w) => sum + w.points, 0) - skippedWords.length
+    const totalPoints = guessedWords.reduce((sum, w) => sum + w.points, 0)
     socket?.emit('end-turn', { 
       roomCode, 
       guessedCount: guessedWords.length,
-      skippedCount: skippedWords.length,
+      skippedCount: 0,
       totalPoints
     })
   }
@@ -309,7 +297,6 @@ export default function GameScreen() {
             <AnimatePresence>
               {currentWords.map((wordObj, index) => {
                 const isGuessed = guessedWords.includes(wordObj)
-                const isSkipped = skippedWords.includes(wordObj)
                 
                 return (
                   <motion.div
@@ -318,7 +305,7 @@ export default function GameScreen() {
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0, opacity: 0 }}
                     className={`glass-strong rounded-xl p-4 border-2 ${getDifficultyColor(wordObj.difficulty)} ${
-                      isGuessed ? 'opacity-30 line-through' : isSkipped ? 'opacity-20 line-through' : ''
+                      isGuessed ? 'opacity-30 line-through' : ''
                     }`}
                   >
                     <div className="text-center">
@@ -361,15 +348,8 @@ export default function GameScreen() {
           {isMyTurn && (
             <div className="flex gap-4 justify-center">
               <button
-                onClick={skipWord}
-                className="px-6 py-3 bg-yellow-500 hover:bg-yellow-600 rounded-xl font-semibold transition-all flex items-center gap-2"
-              >
-                <SkipForward className="w-5 h-5" />
-                Skip (-1pt)
-              </button>
-              <button
                 onClick={handleEndTurn}
-                className="px-6 py-3 bg-red-500 hover:bg-red-600 rounded-xl font-semibold transition-all"
+                className="px-8 py-4 bg-red-500 hover:bg-red-600 rounded-xl font-bold text-lg transition-all transform hover:scale-105"
               >
                 End Turn
               </button>
@@ -380,15 +360,11 @@ export default function GameScreen() {
           <div className="glass rounded-xl p-4 flex justify-around text-center">
             <div>
               <div className="text-2xl font-bold text-green-400">{guessedWords.length}</div>
-              <div className="text-sm text-gray-400">Guessed</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-yellow-400">{skippedWords.length}</div>
-              <div className="text-sm text-gray-400">Skipped</div>
+              <div className="text-sm text-gray-400">Words Guessed</div>
             </div>
             <div>
               <div className="text-2xl font-bold text-blue-400">
-                {guessedWords.reduce((sum, w) => sum + w.points, 0) - skippedWords.length}
+                {guessedWords.reduce((sum, w) => sum + w.points, 0)}
               </div>
               <div className="text-sm text-gray-400">Points</div>
             </div>
@@ -404,18 +380,14 @@ export default function GameScreen() {
           className="glass-strong rounded-2xl p-8 text-center"
         >
           <div className="text-4xl font-bold mb-6">Turn Complete! 🎉</div>
-          <div className="grid grid-cols-3 gap-6 mb-8">
+          <div className="grid grid-cols-2 gap-6 mb-8">
             <div>
-              <div className="text-4xl font-bold text-green-400">{guessedWords.length}</div>
+              <div className="text-5xl font-bold text-green-400">{guessedWords.length}</div>
               <div className="text-gray-400">Words Guessed</div>
             </div>
             <div>
-              <div className="text-4xl font-bold text-yellow-400">{skippedWords.length}</div>
-              <div className="text-gray-400">Words Skipped</div>
-            </div>
-            <div>
-              <div className="text-4xl font-bold text-blue-400">
-                {guessedWords.reduce((sum, w) => sum + w.points, 0) - skippedWords.length}
+              <div className="text-5xl font-bold text-blue-400">
+                {guessedWords.reduce((sum, w) => sum + w.points, 0)}
               </div>
               <div className="text-gray-400">Points Earned</div>
             </div>

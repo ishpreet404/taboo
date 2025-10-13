@@ -124,7 +124,7 @@ io.on("connection", (socket) => {
 	socket.on("start-turn", (data) => {
 		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
-		
+
 		if (room && room.gameState) {
 			io.to(roomCode).emit("turn-started", { gameState: room.gameState });
 		}
@@ -134,41 +134,24 @@ io.on("connection", (socket) => {
 	socket.on("word-guessed", (data) => {
 		const { roomCode, word, guesser, points } = data;
 		const room = gameRooms.get(roomCode);
-		
+
 		if (room && room.gameState) {
 			// Update team score
 			const teamIndex = room.gameState.currentTeamIndex;
 			room.gameState.teams[teamIndex].score += points;
-			
+
 			// Track player contribution
 			if (!room.gameState.playerContributions[guesser]) {
 				room.gameState.playerContributions[guesser] = { points: 0, words: [] };
 			}
 			room.gameState.playerContributions[guesser].points += points;
 			room.gameState.playerContributions[guesser].words.push(word);
-			
-			io.to(roomCode).emit("word-guessed-sync", { 
-				word, 
-				guesser, 
-				points,
-				gameState: room.gameState 
-			});
-		}
-	});
 
-	// Word skipped
-	socket.on("word-skipped", (data) => {
-		const { roomCode, word } = data;
-		const room = gameRooms.get(roomCode);
-		
-		if (room && room.gameState) {
-			// Deduct 1 point for skipping
-			const teamIndex = room.gameState.currentTeamIndex;
-			room.gameState.teams[teamIndex].score = Math.max(0, room.gameState.teams[teamIndex].score - 1);
-			
-			io.to(roomCode).emit("word-skipped-sync", { 
+			io.to(roomCode).emit("word-guessed-sync", {
 				word,
-				gameState: room.gameState 
+				guesser,
+				points,
+				gameState: room.gameState,
 			});
 		}
 	});
@@ -177,13 +160,13 @@ io.on("connection", (socket) => {
 	socket.on("end-turn", (data) => {
 		const { roomCode, guessedCount, skippedCount, totalPoints } = data;
 		const room = gameRooms.get(roomCode);
-		
+
 		if (room && room.gameState) {
-			io.to(roomCode).emit("turn-ended", { 
-				guessedCount, 
-				skippedCount, 
+			io.to(roomCode).emit("turn-ended", {
+				guessedCount,
+				skippedCount,
 				totalPoints,
-				gameState: room.gameState 
+				gameState: room.gameState,
 			});
 		}
 	});
@@ -192,23 +175,24 @@ io.on("connection", (socket) => {
 	socket.on("next-turn", (data) => {
 		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
-		
+
 		if (room && room.gameState) {
 			const gs = room.gameState;
-			
+
 			// Move to next team
 			gs.currentTeamIndex = (gs.currentTeamIndex + 1) % gs.teams.length;
-			
+
 			// If back to team 0, increment round
 			if (gs.currentTeamIndex === 0) {
 				gs.round++;
 			}
-			
+
 			// Move to next describer in the team
 			const currentTeam = gs.currentTeamIndex;
-			gs.currentDescriberIndex[currentTeam] = 
-				(gs.currentDescriberIndex[currentTeam] + 1) % gs.teams[currentTeam].players.length;
-			
+			gs.currentDescriberIndex[currentTeam] =
+				(gs.currentDescriberIndex[currentTeam] + 1) %
+				gs.teams[currentTeam].players.length;
+
 			// Check if game is over
 			if (gs.round > gs.maxRounds) {
 				io.to(roomCode).emit("game-over", { gameState: gs });
@@ -222,7 +206,7 @@ io.on("connection", (socket) => {
 	socket.on("leave-game", (data) => {
 		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
-		
+
 		if (room) {
 			room.started = false;
 			room.gameState = null;
@@ -254,17 +238,24 @@ io.on("connection", (socket) => {
 		gameRooms.forEach((room, roomCode) => {
 			const playerIndex = room.players.findIndex((p) => p.id === socket.id);
 			if (playerIndex !== -1) {
+				const wasHost = room.host === socket.id;
 				room.players.splice(playerIndex, 1);
 
-				// If room is empty, delete it
-				if (room.players.length === 0) {
+				// If host left, close the entire room
+				if (wasHost) {
+					// Notify all players that host left and room is closing
+					io.to(roomCode).emit("host-left", { 
+						message: "Host has left. Room is closing." 
+					});
+					// Delete the room
+					gameRooms.delete(roomCode);
+					console.log(`Room ${roomCode} deleted (host left)`);
+				} else if (room.players.length === 0) {
+					// If room is empty, delete it
 					gameRooms.delete(roomCode);
 					console.log(`Room ${roomCode} deleted (empty)`);
 				} else {
-					// If host left, assign new host
-					if (room.host === socket.id && room.players.length > 0) {
-						room.host = room.players[0].id;
-					}
+					// Regular player left, notify others
 					io.to(roomCode).emit("player-left", { socketId: socket.id, room });
 				}
 			}

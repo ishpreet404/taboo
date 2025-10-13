@@ -157,6 +157,15 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setCurrentScreen('lobby')
     })
 
+    newSocket.on('host-left', (data) => {
+      alert(data.message)
+      setCurrentScreen('room')
+      setRoomCode(null)
+      setPlayers([])
+      setIsHost(false)
+      setMyTeam(null)
+    })
+
     newSocket.on('error', (data) => {
       alert(data.message)
     })
