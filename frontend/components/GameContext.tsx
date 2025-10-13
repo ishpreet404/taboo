@@ -75,7 +75,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     currentTeamIndex: 0,
     currentDescriberIndex: [0, 0],
     round: 1,
-    maxRounds: 6,
+    maxRounds: 12,
     turnTime: 60,
     timeRemaining: 60,
     currentWords: [],

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useGame } from './GameContext'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Clock, Trophy, Zap, LogOut } from 'lucide-react'
+import { Clock, Trophy, Zap, LogOut, Users } from 'lucide-react'
 import { wordDatabase } from '@/lib/wordDatabase'
 
 export default function GameScreen() {
@@ -11,6 +11,7 @@ export default function GameScreen() {
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
+  const [guessedByPlayer, setGuessedByPlayer] = useState<{word: string, guesser: string, points: number}[]>([])
   const [guess, setGuess] = useState('')
   const [timeRemaining, setTimeRemaining] = useState(60)
   const [turnActive, setTurnActive] = useState(false)
@@ -25,9 +26,13 @@ export default function GameScreen() {
     if (!socket) return
 
     const handleWordGuessed = (data: any) => {
-      // Update local state with server data
-      if (data.gameState) {
-        // Refresh game state from server
+      // Track who guessed the word
+      if (data.word && data.guesser && data.points) {
+        setGuessedByPlayer(prev => [...prev, {
+          word: data.word,
+          guesser: data.guesser,
+          points: data.points
+        }])
       }
     }
 
@@ -50,6 +55,7 @@ export default function GameScreen() {
     const handleNextTurn = (data: any) => {
       setGamePhase('turn-start')
       setGuessedWords([])
+      setGuessedByPlayer([])
       setTimeRemaining(60)
     }
 
@@ -170,6 +176,14 @@ export default function GameScreen() {
     socket?.emit('next-turn', { roomCode })
   }
 
+  const handleSkipTurn = () => {
+    if (!isMyTurn) {
+      // Emit skip-guesser-turn event to server
+      socket?.emit('skip-guesser-turn', { roomCode, playerName })
+      alert('You have skipped your guessing turn!')
+    }
+  }
+
   const getDifficultyColor = (difficulty: string) => {
     switch (difficulty) {
       case 'easy': return 'border-green-500 bg-green-500/10'
@@ -269,6 +283,24 @@ export default function GameScreen() {
         </motion.div>
       </div>
 
+      {/* Role Indicator */}
+      {gamePhase === 'playing' && (
+        <motion.div
+          initial={{ y: -10, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className={`glass-strong rounded-xl p-3 md:p-4 text-center border-2 ${
+            isMyTurn ? 'border-purple-500/50 bg-purple-500/10' : 'border-green-500/50 bg-green-500/10'
+          }`}
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Users className="w-5 h-5" />
+            <span className="font-bold text-lg md:text-xl">
+              {isMyTurn ? '🎤 You are DESCRIBING' : '🤔 You are GUESSING'}
+            </span>
+          </div>
+        </motion.div>
+      )}
+
       {/* Turn Start */}
       {gamePhase === 'turn-start' && (
         <motion.div
@@ -350,7 +382,7 @@ export default function GameScreen() {
             <motion.div
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
-              className="glass-strong rounded-xl p-6"
+              className="glass-strong rounded-xl p-6 space-y-3"
             >
               <div className="flex gap-3">
                 <input
@@ -369,6 +401,12 @@ export default function GameScreen() {
                   Submit
                 </button>
               </div>
+              <button
+                onClick={handleSkipTurn}
+                className="w-full py-2 px-4 bg-orange-500 hover:bg-orange-600 rounded-xl font-semibold text-sm md:text-base transition-all"
+              >
+                ⏭️ Skip My Turn
+              </button>
             </motion.div>
           )}
 
@@ -397,6 +435,33 @@ export default function GameScreen() {
               <div className="text-xs md:text-sm text-gray-400">Points</div>
             </div>
           </div>
+
+          {/* Who Guessed What */}
+          {guessedByPlayer.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="glass rounded-xl p-4"
+            >
+              <h3 className="text-sm font-semibold mb-3 text-gray-400">Recent Guesses:</h3>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {guessedByPlayer.slice().reverse().map((item, index) => (
+                  <div key={index} className="glass-strong rounded-lg p-2 flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="w-8 h-8 bg-gradient-to-r from-green-500 to-emerald-600 rounded-full flex items-center justify-center font-bold text-xs">
+                        {item.guesser.charAt(0).toUpperCase()}
+                      </span>
+                      <div>
+                        <div className="font-bold text-green-400">{item.word}</div>
+                        <div className="text-xs text-gray-400">by {item.guesser}</div>
+                      </div>
+                    </div>
+                    <div className="text-blue-400 font-bold">+{item.points}</div>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )}
         </>
       )}
 

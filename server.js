@@ -175,6 +175,20 @@ io.on("connection", (socket) => {
 		}
 	});
 
+	// Skip guesser turn
+	socket.on("skip-guesser-turn", (data) => {
+		const { roomCode, playerName } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room) {
+			// Notify all players that someone skipped
+			io.to(roomCode).emit("guesser-skipped", {
+				playerName: playerName,
+				message: `${playerName} skipped their turn`,
+			});
+		}
+	});
+
 	// Next turn
 	socket.on("next-turn", (data) => {
 		const { roomCode } = data;
