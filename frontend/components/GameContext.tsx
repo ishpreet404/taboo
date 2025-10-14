@@ -111,8 +111,43 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setCurrentScreen('lobby')
     })
 
+    newSocket.on('room-joined-midgame', (data) => {
+      setRoomCode(data.roomCode)
+      setPlayers(data.room.players)
+      setGameState(data.gameState)
+      setCurrentScreen('lobby') // Show lobby so they can pick a team
+      alert('Game is in progress! Please join a team to participate.')
+    })
+
+    newSocket.on('room-rejoined', (data) => {
+      setRoomCode(data.roomCode)
+      setPlayers(data.room.players)
+      setGameState(data.gameState)
+      // Find player's team
+      const player = data.room.players.find((p: any) => p.id === newSocket.id)
+      if (player) {
+        setMyTeam(player.team)
+      }
+      setCurrentScreen('game')
+      alert('Reconnected to game!')
+    })
+
     newSocket.on('player-joined', (data) => {
       setPlayers(data.room.players)
+    })
+
+    newSocket.on('player-joined-midgame', (data) => {
+      setPlayers(data.room.players)
+      // Notify existing players
+      if (data.player.name !== playerName) {
+        // Show notification for other players
+        console.log(`${data.player.name} joined the game`)
+      }
+    })
+
+    newSocket.on('player-reconnected', (data) => {
+      setPlayers(data.room.players)
+      console.log(`${data.playerName} reconnected`)
     })
 
     newSocket.on('player-left', (data) => {
@@ -121,6 +156,21 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     newSocket.on('team-updated', (data) => {
       setPlayers(data.room.players)
+    })
+
+    newSocket.on('team-updated-midgame', (data) => {
+      setPlayers(data.room.players)
+      setGameState(data.gameState)
+      // If this is the player who just joined
+      const player = data.room.players.find((p: any) => p.id === newSocket.id)
+      if (player && player.name === data.joinedPlayer) {
+        setMyTeam(player.team)
+        setCurrentScreen('game')
+        alert(`You joined ${data.joinedTeam}! The game is in progress.`)
+      } else {
+        // Notify other players
+        console.log(`${data.joinedPlayer} joined ${data.joinedTeam}`)
+      }
     })
 
     newSocket.on('game-started', (data) => {
@@ -145,6 +195,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
     })
 
     newSocket.on('next-turn-sync', (data) => {
+      setGameState(data.gameState)
+    })
+
+    newSocket.on('describer-skipped', (data) => {
       setGameState(data.gameState)
     })
 

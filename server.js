@@ -1,5 +1,4 @@
 // Standalone Express + Socket.IO server for local development
-// This won't be used on Netlify, but allows local testing
 const express = require("express");
 const http = require("http");
 const socketIO = require("socket.io");
@@ -62,24 +61,66 @@ io.on("connection", (socket) => {
 			return;
 		}
 
-		if (room.started) {
-			socket.emit("error", { message: "Game already started" });
+		// Check if player already exists (reconnection)
+		const existingPlayer = room.players.find((p) => p.name === playerName);
+
+		if (existingPlayer) {
+			// Reconnection - update socket ID
+			existingPlayer.id = socket.id;
+			socket.join(roomCode);
+
+			if (room.started) {
+				socket.emit("room-rejoined", {
+					roomCode,
+					room,
+					gameState: room.gameState,
+				});
+				io.to(roomCode).emit("player-reconnected", {
+					playerName,
+					room,
+				});
+			} else {
+				socket.emit("room-joined", { roomCode, room });
+				io.to(roomCode).emit("player-joined", {
+					player: existingPlayer,
+					room,
+				});
+			}
+			console.log(`Player ${playerName} reconnected to room: ${roomCode}`);
 			return;
 		}
 
-		room.players.push({
+		// New player joining
+		const newPlayer = {
 			id: socket.id,
 			name: playerName,
 			team: null,
-		});
+		};
 
+		room.players.push(newPlayer);
 		socket.join(roomCode);
-		socket.emit("room-joined", { roomCode, room });
-		io.to(roomCode).emit("player-joined", {
-			player: room.players[room.players.length - 1],
-			room,
-		});
-		console.log(`Player ${playerName} joined room: ${roomCode}`);
+
+		if (room.started) {
+			// Mid-game join - allow them to join and assign to a team later
+			socket.emit("room-joined-midgame", {
+				roomCode,
+				room,
+				gameState: room.gameState,
+			});
+			io.to(roomCode).emit("player-joined-midgame", {
+				player: newPlayer,
+				room,
+			});
+			console.log(`Player ${playerName} joined mid-game in room: ${roomCode}`);
+		} else {
+			// Normal join before game starts
+			socket.emit("room-joined", { roomCode, room });
+			io.to(roomCode).emit("player-joined", {
+				player: newPlayer,
+				room,
+			});
+			console.log(`Player ${playerName} joined room: ${roomCode}`);
+		}
 	});
 
 	// Assign player to team
@@ -91,6 +132,29 @@ io.on("connection", (socket) => {
 			const player = room.players.find((p) => p.id === socket.id);
 			if (player) {
 				player.team = teamIndex;
+
+				// If game is in progress, also add player to the game state team
+				if (room.started && room.gameState) {
+					const teamName = room.gameState.teams[teamIndex].name;
+					if (!room.gameState.teams[teamIndex].players.includes(player.name)) {
+						room.gameState.teams[teamIndex].players.push(player.name);
+
+						// Initialize describer index if needed
+						if (room.gameState.currentDescriberIndex[teamIndex] === undefined) {
+							room.gameState.currentDescriberIndex[teamIndex] = 0;
+						}
+
+						io.to(roomCode).emit("team-updated-midgame", {
+							room,
+							gameState: room.gameState,
+							joinedPlayer: player.name,
+							joinedTeam: teamName,
+						});
+						console.log(`Player ${player.name} joined ${teamName} mid-game`);
+						return;
+					}
+				}
+
 				io.to(roomCode).emit("team-updated", { room });
 			}
 		}
@@ -126,9 +190,19 @@ io.on("connection", (socket) => {
 		const room = gameRooms.get(roomCode);
 
 		if (room && room.gameState) {
+			const gs = room.gameState;
+
+			// Mark that this turn has started for the current team
+			if (!gs.turnCount) {
+				gs.turnCount = {};
+			}
+			if (!gs.turnCount[gs.currentTeamIndex]) {
+				gs.turnCount[gs.currentTeamIndex] = 0;
+			}
+
 			// Broadcast turn started with words to all players
 			io.to(roomCode).emit("turn-started", {
-				gameState: room.gameState,
+				gameState: gs,
 				words: words,
 			});
 		}
@@ -174,13 +248,31 @@ io.on("connection", (socket) => {
 		const room = gameRooms.get(roomCode);
 
 		if (room && room.gameState) {
+			const gs = room.gameState;
+
+			// Increment turn count for this team
+			if (!gs.turnCount) {
+				gs.turnCount = {};
+			}
+			if (!gs.turnCount[gs.currentTeamIndex]) {
+				gs.turnCount[gs.currentTeamIndex] = 0;
+			}
+			gs.turnCount[gs.currentTeamIndex]++;
+
+			// Rotate describer within the team after each turn
+			const teamSize = gs.teams[gs.currentTeamIndex].players.length;
+			if (teamSize > 0) {
+				gs.currentDescriberIndex[gs.currentTeamIndex] =
+					gs.turnCount[gs.currentTeamIndex] % teamSize;
+			}
+
 			io.to(roomCode).emit("turn-ended", {
 				guessedCount,
 				skippedCount,
 				totalPoints,
 				guessedWords,
 				guessedByPlayer,
-				gameState: room.gameState,
+				gameState: gs,
 			});
 		}
 	});
@@ -190,11 +282,20 @@ io.on("connection", (socket) => {
 		const { roomCode, playerName } = data;
 		const room = gameRooms.get(roomCode);
 
-		if (room) {
-			// Notify all players that someone skipped
-			io.to(roomCode).emit("guesser-skipped", {
+		if (room && room.gameState) {
+			const gs = room.gameState;
+
+			// Move to next describer in the current team
+			const currentTeam = gs.currentTeamIndex;
+			gs.currentDescriberIndex[currentTeam] =
+				(gs.currentDescriberIndex[currentTeam] + 1) %
+				gs.teams[currentTeam].players.length;
+
+			// Notify all players that someone skipped and send updated game state
+			io.to(roomCode).emit("describer-skipped", {
 				playerName: playerName,
 				message: `${playerName} skipped their turn`,
+				gameState: gs,
 			});
 		}
 	});
@@ -208,25 +309,36 @@ io.on("connection", (socket) => {
 			const gs = room.gameState;
 
 			// Move to next team
+			const previousTeam = gs.currentTeamIndex;
 			gs.currentTeamIndex = (gs.currentTeamIndex + 1) % gs.teams.length;
 
-			// If back to team 0, increment round
+			// If back to team 0, increment round (completed full cycle)
 			if (gs.currentTeamIndex === 0) {
 				gs.round++;
 			}
 
-			// Move to next describer in the team
-			const currentTeam = gs.currentTeamIndex;
-			gs.currentDescriberIndex[currentTeam] =
-				(gs.currentDescriberIndex[currentTeam] + 1) %
-				gs.teams[currentTeam].players.length;
-
 			// Check if game is over
 			if (gs.round > gs.maxRounds) {
 				io.to(roomCode).emit("game-over", { gameState: gs });
-			} else {
-				io.to(roomCode).emit("next-turn-sync", { gameState: gs });
+				return;
 			}
+
+			// Ensure describer index exists for all teams
+			if (gs.currentDescriberIndex[gs.currentTeamIndex] === undefined) {
+				gs.currentDescriberIndex[gs.currentTeamIndex] = 0;
+			}
+
+			// Validate and fix describer indices
+			gs.teams.forEach((team, idx) => {
+				if (team.players.length > 0) {
+					// Ensure index is within bounds
+					if (gs.currentDescriberIndex[idx] >= team.players.length) {
+						gs.currentDescriberIndex[idx] = 0;
+					}
+				}
+			});
+
+			io.to(roomCode).emit("next-turn-sync", { gameState: gs });
 		}
 	});
 

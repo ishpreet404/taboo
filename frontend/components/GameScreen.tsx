@@ -11,12 +11,15 @@ export default function GameScreen() {
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
   const [guessedByPlayer, setGuessedByPlayer] = useState<{word: string, guesser: string, points: number}[]>([])
+  const [previousRoundWords, setPreviousRoundWords] = useState<any[]>([])
   const [guess, setGuess] = useState('')
   const [timeRemaining, setTimeRemaining] = useState(60)
   const [turnActive, setTurnActive] = useState(false)
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [showBonusNotification, setShowBonusNotification] = useState(false)
+  const [bonusWordCount, setBonusWordCount] = useState(0)
   const [usedWordIndices, setUsedWordIndices] = useState<Set<number>>(new Set())
+  const [bonusMilestones, setBonusMilestones] = useState<number[]>([6, 10, 14, 18, 22]) // Next bonus at 6, then 10, 14, 18, 22...
 
   const currentTeam = gameState.teams[gameState.currentTeamIndex]
   const currentDescriber = currentTeam.players[gameState.currentDescriberIndex[gameState.currentTeamIndex]]
@@ -66,6 +69,8 @@ export default function GameScreen() {
     const handleTurnEnded = (data: any) => {
       setTurnActive(false)
       setGamePhase('turn-end')
+      // Store current words as previous round words for display
+      setPreviousRoundWords(currentWords)
       // Sync guessed words from the describer to all players
       if (data.guessedWords && !isMyTurn) {
         setGuessedWords(data.guessedWords)
@@ -76,6 +81,20 @@ export default function GameScreen() {
     }
 
     const handleNextTurn = (data: any) => {
+      setGamePhase('turn-start')
+      setGuessedWords([])
+      setGuessedByPlayer([])
+      setPreviousRoundWords([]) // Clear previous round words when starting new turn
+      setTimeRemaining(60)
+    }
+
+    const handleDescriberSkipped = (data: any) => {
+      // Update game state when describer is skipped
+      if (data.gameState) {
+        // The gameState will be updated through GameContext
+        alert(`${data.playerName} skipped their turn. Next describer is ready!`)
+      }
+      // Reset to turn-start phase for the new describer
       setGamePhase('turn-start')
       setGuessedWords([])
       setGuessedByPlayer([])
@@ -106,6 +125,7 @@ export default function GameScreen() {
     socket.on('timer-sync', handleTimerSync)
     socket.on('host-left', handleHostLeft)
     socket.on('bonus-words-sync', handleBonusWords)
+    socket.on('describer-skipped', handleDescriberSkipped)
 
     return () => {
       socket.off('word-guessed-sync', handleWordGuessed)
@@ -115,6 +135,7 @@ export default function GameScreen() {
       socket.off('timer-sync', handleTimerSync)
       socket.off('host-left', handleHostLeft)
       socket.off('bonus-words-sync', handleBonusWords)
+      socket.off('describer-skipped', handleDescriberSkipped)
     }
   }, [socket])
 
@@ -144,7 +165,7 @@ export default function GameScreen() {
     return shuffled
   }
 
-  const selectWords = (count: number) => {
+  const selectWords = (count: number, ensureHardWords: boolean = false) => {
     // Get indices of words we haven't used yet
     const availableIndices = wordDatabase
       .map((_, index) => index)
@@ -153,22 +174,50 @@ export default function GameScreen() {
     // If we've used more than 80% of words, reset the used words set
     if (availableIndices.length < wordDatabase.length * 0.2) {
       setUsedWordIndices(new Set())
-      return selectWords(count) // Recursively call with reset set
+      return selectWords(count, ensureHardWords) // Recursively call with reset set
     }
     
-    // Shuffle available indices
-    const shuffledIndices = shuffleArray(availableIndices)
+    let selectedWords: any[] = []
     
-    // Select the requested number of words
-    const selectedIndices = shuffledIndices.slice(0, count)
-    const selectedWords = selectedIndices.map(index => wordDatabase[index])
-    
-    // Mark these words as used
-    setUsedWordIndices(prev => {
-      const newSet = new Set(prev)
-      selectedIndices.forEach(index => newSet.add(index))
-      return newSet
-    })
+    // If we need to ensure hard words (for initial round setup)
+    if (ensureHardWords) {
+      // Get hard words
+      const hardWordIndices = availableIndices.filter(index => 
+        wordDatabase[index].difficulty === 'hard'
+      )
+      const shuffledHardIndices = shuffleArray(hardWordIndices)
+      const selectedHardIndices = shuffledHardIndices.slice(0, Math.min(3, hardWordIndices.length))
+      
+      // Get remaining words
+      const remainingIndices = availableIndices.filter(index => 
+        !selectedHardIndices.includes(index)
+      )
+      const shuffledRemainingIndices = shuffleArray(remainingIndices)
+      const selectedRemainingIndices = shuffledRemainingIndices.slice(0, count - selectedHardIndices.length)
+      
+      // Combine
+      const allSelectedIndices = [...selectedHardIndices, ...selectedRemainingIndices]
+      selectedWords = allSelectedIndices.map(index => wordDatabase[index])
+      
+      // Mark as used
+      setUsedWordIndices(prev => {
+        const newSet = new Set(prev)
+        allSelectedIndices.forEach(index => newSet.add(index))
+        return newSet
+      })
+    } else {
+      // Regular selection without hard word requirement
+      const shuffledIndices = shuffleArray(availableIndices)
+      const selectedIndices = shuffledIndices.slice(0, count)
+      selectedWords = selectedIndices.map(index => wordDatabase[index])
+      
+      // Mark as used
+      setUsedWordIndices(prev => {
+        const newSet = new Set(prev)
+        selectedIndices.forEach(index => newSet.add(index))
+        return newSet
+      })
+    }
     
     // Sort by difficulty for better gameplay (easy to hard)
     return selectedWords.sort((a, b) => {
@@ -178,9 +227,11 @@ export default function GameScreen() {
   }
 
   const startTurn = () => {
-    const words = selectWords(10)
+    // Select 10 words with at least 3 hard words
+    const words = selectWords(10, true)
     setCurrentWords(words)
     setGuessedWords([])
+    setBonusMilestones([6, 10, 14, 18, 22]) // Reset bonus milestones
     setTimeRemaining(60)
     setTurnActive(true)
     setGamePhase('playing')
@@ -218,19 +269,23 @@ export default function GameScreen() {
           points: wordObj.points 
         })
         
-        // Add bonus words when 6 words are guessed correctly
-        if (newGuessed.length === 6) {
-          const bonusWords = selectWords(3)
+        // Dynamic bonus system - check if we hit any milestone
+        const nextMilestone = bonusMilestones.find(m => m === newGuessed.length)
+        if (nextMilestone) {
+          // Number of bonus words increases with each milestone
+          const bonusCount = 3 + Math.floor(bonusMilestones.indexOf(nextMilestone) / 2)
+          const bonusWords = selectWords(bonusCount)
           setCurrentWords([...currentWords, ...bonusWords])
+          setBonusWordCount(bonusCount)
           setShowBonusNotification(true)
           setTimeout(() => setShowBonusNotification(false), 3000)
           // Notify server about bonus words
           socket?.emit('bonus-words-added', { roomCode, words: bonusWords })
         }
         
-        // Add more words if running low
+        // Add more words if running low (safety net)
         const remaining = currentWords.length - newGuessed.length
-        if (remaining <= 2) {
+        if (remaining <= 2 && !nextMilestone) {
           setCurrentWords([...currentWords, ...selectWords(5)])
         }
         break
@@ -402,7 +457,7 @@ export default function GameScreen() {
         <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 glass-strong rounded-2xl p-6 border-2 border-yellow-500/40 bg-yellow-500/10">
           <div className="text-center">
             <div className="text-2xl font-bold text-yellow-400 mb-1">BONUS!</div>
-            <div className="text-white">+3 Extra Words Added!</div>
+            <div className="text-white">+{bonusWordCount} Extra Words Added!</div>
           </div>
         </div>
       )}
@@ -650,6 +705,45 @@ export default function GameScreen() {
               </div>
             </div>
           </div>
+
+          {/* Previous Round Words - Visible to all players */}
+          {previousRoundWords.length > 0 && (
+            <div className="mb-4 sm:mb-6">
+              <h3 className="text-lg sm:text-xl font-semibold mb-3 text-gray-300">Words from this round:</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                {previousRoundWords.map((wordObj, index) => {
+                  const wasGuessed = guessedWords.some(w => w.word === wordObj.word)
+                  
+                  return (
+                    <div
+                      key={`prev-${wordObj.word}-${index}`}
+                      className={`glass-strong rounded-lg p-2 sm:p-3 border ${
+                        wasGuessed 
+                          ? 'border-green-500/50 bg-green-500/10' 
+                          : 'border-red-500/50 bg-red-500/10'
+                      }`}
+                    >
+                      <div className="text-center">
+                        <div className="flex items-center justify-center gap-1 mb-1">
+                          <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${getDifficultyBadge(wordObj.difficulty).color}`}>
+                            {getDifficultyBadge(wordObj.difficulty).label}
+                          </span>
+                        </div>
+                        <div className={`font-bold text-sm sm:text-base mb-1 ${wasGuessed ? 'text-green-400' : 'text-gray-400'}`}>
+                          {wordObj.word}
+                        </div>
+                        <div className="text-xs text-gray-500 flex items-center justify-center gap-1">
+                          <Zap className="w-2.5 h-2.5 opacity-60" />
+                          {wordObj.points}pts
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {isMyTurn && (
             <button
               onClick={handleNextTurn}
