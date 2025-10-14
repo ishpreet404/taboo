@@ -167,8 +167,25 @@ io.on("connection", (socket) => {
 
 		if (room && room.host === socket.id) {
 			room.started = true;
-			room.gameState = gameState;
-			io.to(roomCode).emit("game-started", { gameState });
+
+			// Reset game state completely for new game
+			room.gameState = {
+				...gameState,
+				turnCount: {}, // Reset turn counter
+				round: 1,
+				currentTeamIndex: 0,
+				currentDescriberIndex: [0, 0],
+				teams: gameState.teams.map((team) => ({
+					...team,
+					score: 0,
+				})),
+				guessedWords: [],
+				skippedWords: [],
+				currentWords: [],
+				playerContributions: {},
+			};
+
+			io.to(roomCode).emit("game-started", { gameState: room.gameState });
 			console.log(`Game started in room: ${roomCode}`);
 		}
 	});

@@ -226,7 +226,31 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     setSocket(newSocket)
 
+    // Handle tab/window close - ensure socket disconnects
+    const handleBeforeUnload = () => {
+      if (newSocket && roomCode) {
+        newSocket.emit('leave-game', { roomCode })
+        newSocket.disconnect()
+      }
+    }
+
+    // Handle page visibility change (tab switch, minimize, etc.)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        // Page is hidden but not closed yet, keep connection alive
+        // Socket.IO will handle disconnection if page is actually closed
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      if (roomCode) {
+        newSocket.emit('leave-game', { roomCode })
+      }
       newSocket.close()
     }
   }, [])
@@ -249,9 +273,23 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const startGame = () => {
     if (!isHost) return
 
-    const newGameState = { ...gameState }
-    newGameState.teams[0].players = players.filter(p => p.team === 0).map(p => p.name)
-    newGameState.teams[1].players = players.filter(p => p.team === 1).map(p => p.name)
+    // Reset game state to initial values for a fresh game
+    const newGameState: GameState = {
+      teams: [
+        { name: 'Team 1', players: players.filter(p => p.team === 0).map(p => p.name), score: 0 },
+        { name: 'Team 2', players: players.filter(p => p.team === 1).map(p => p.name), score: 0 }
+      ],
+      currentTeamIndex: 0,
+      currentDescriberIndex: [0, 0],
+      round: 1,
+      maxRounds: 12,
+      turnTime: 60,
+      timeRemaining: 60,
+      currentWords: [],
+      guessedWords: [],
+      skippedWords: [],
+      playerContributions: {}
+    }
 
     socket?.emit('start-game', { roomCode, gameState: newGameState })
   }
