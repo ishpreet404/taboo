@@ -220,6 +220,30 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setMyTeam(null)
     })
 
+    newSocket.on('player-kicked', (data) => {
+      setPlayers(data.room.players)
+      if (data.gameState) {
+        setGameState(data.gameState)
+      }
+    })
+
+    newSocket.on('you-were-kicked', (data) => {
+      alert(data.message)
+      setCurrentScreen('room')
+      setRoomCode(null)
+      setPlayers([])
+      setIsHost(false)
+      setMyTeam(null)
+    })
+
+    newSocket.on('describer-changed', (data) => {
+      setGameState(data.gameState)
+      // Show notification to everyone
+      if (data.message) {
+        alert(data.message)
+      }
+    })
+
     newSocket.on('error', (data) => {
       alert(data.message)
     })

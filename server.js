@@ -426,6 +426,83 @@ io.on("connection", (socket) => {
 		socket.to(roomCode).emit("bonus-words-sync", { words });
 	});
 
+	// Kick player (host only)
+	socket.on("kick-player", (data) => {
+		const { roomCode, playerName } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id) {
+			// Find the player to kick
+			const playerIndex = room.players.findIndex((p) => p.name === playerName);
+			if (playerIndex !== -1) {
+				const kickedPlayer = room.players[playerIndex];
+				room.players.splice(playerIndex, 1);
+
+				// Remove from game state teams if game has started
+				if (room.gameState) {
+					room.gameState.teams.forEach((team) => {
+						const teamPlayerIndex = team.players.indexOf(playerName);
+						if (teamPlayerIndex !== -1) {
+							team.players.splice(teamPlayerIndex, 1);
+						}
+					});
+				}
+
+				// Notify all players
+				io.to(roomCode).emit("player-kicked", {
+					playerName: playerName,
+					room: room,
+					gameState: room.gameState,
+				});
+
+				// Notify the kicked player specifically
+				io.to(kickedPlayer.id).emit("you-were-kicked", {
+					message: "You have been kicked from the game by the host.",
+				});
+
+				console.log(`${playerName} was kicked from room ${roomCode}`);
+			}
+		}
+	});
+
+	// Set describer (host only)
+	socket.on("set-describer", (data) => {
+		const { roomCode, teamIndex, playerIndex } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id && room.gameState) {
+			const gs = room.gameState;
+
+			// Validate team and player indices
+			if (
+				teamIndex >= 0 &&
+				teamIndex < gs.teams.length &&
+				playerIndex >= 0 &&
+				playerIndex < gs.teams[teamIndex].players.length
+			) {
+				// Set the describer for the specified team
+				gs.currentDescriberIndex[teamIndex] = playerIndex;
+
+				// If setting describer for current team, also update turn
+				if (teamIndex === gs.currentTeamIndex) {
+					io.to(roomCode).emit("describer-changed", {
+						gameState: gs,
+						message: `${gs.teams[teamIndex].players[playerIndex]} is now the describer for ${gs.teams[teamIndex].name}`,
+					});
+				} else {
+					io.to(roomCode).emit("describer-changed", {
+						gameState: gs,
+						message: `${gs.teams[teamIndex].players[playerIndex]} will be the next describer for ${gs.teams[teamIndex].name}`,
+					});
+				}
+
+				console.log(
+					`Host set describer for team ${teamIndex} to player ${playerIndex} in room ${roomCode}`
+				);
+			}
+		}
+	});
+
 	// Chat message
 	socket.on("chat-message", (data) => {
 		const { roomCode, message, playerName } = data;

@@ -6,7 +6,7 @@ import { Clock, Trophy, Zap, LogOut, Users } from 'lucide-react'
 import { wordDatabase } from '@/lib/wordDatabase'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
@@ -20,6 +20,7 @@ export default function GameScreen() {
   const [bonusWordCount, setBonusWordCount] = useState(0)
   const [usedWordIndices, setUsedWordIndices] = useState<Set<number>>(new Set())
   const [bonusMilestones, setBonusMilestones] = useState<number[]>([6, 10, 14, 18, 22]) // Next bonus at 6, then 10, 14, 18, 22...
+  const [showHostMenu, setShowHostMenu] = useState<{ teamIndex: number; playerIndex: number } | null>(null)
 
   const currentTeam = gameState.teams[gameState.currentTeamIndex]
   const currentDescriber = currentTeam.players[gameState.currentDescriberIndex[gameState.currentTeamIndex]]
@@ -119,6 +120,7 @@ export default function GameScreen() {
     const handleBonusWords = (data: any) => {
       if (data.words) {
         setCurrentWords(prev => [...prev, ...data.words])
+        setBonusWordCount(data.words.length) // Set the count for the notification
         setShowBonusNotification(true)
         setTimeout(() => setShowBonusNotification(false), 3000)
       }
@@ -144,6 +146,17 @@ export default function GameScreen() {
       socket.off('describer-skipped', handleDescriberSkipped)
     }
   }, [socket])
+
+  // Close host menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (showHostMenu) {
+        setShowHostMenu(null)
+      }
+    }
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [showHostMenu])
 
   // Timer
   useEffect(() => {
@@ -307,7 +320,7 @@ export default function GameScreen() {
 
   const handleEndTurn = () => {
     setTurnActive(false)
-    setGamePhase('turn-end')
+    // Don't set gamePhase here - let the socket event handle it for everyone
     
     const totalPoints = guessedWords.reduce((sum, w) => sum + w.points, 0)
     socket?.emit('end-turn', { 
@@ -364,6 +377,18 @@ export default function GameScreen() {
     leaveGame()
   }
 
+  const handleKickPlayer = (playerName: string) => {
+    if (!isHost) return
+    socket?.emit('kick-player', { roomCode, playerName })
+    setShowHostMenu(null)
+  }
+
+  const handleMakeDescriber = (teamIndex: number, playerIndex: number) => {
+    if (!isHost) return
+    socket?.emit('set-describer', { roomCode, teamIndex, playerIndex })
+    setShowHostMenu(null)
+  }
+
   return (
     <div className="space-y-3 md:space-y-4 lg:space-y-6 relative px-2 sm:px-0">
       {/* Leave Game Button - Top Right */}
@@ -409,10 +434,11 @@ export default function GameScreen() {
         </div>
       )}
 
-      {/* Header - Scores */}
+      {/* Header - Scores and Team Players */}
       <div className="grid grid-cols-2 gap-3 md:gap-4 mt-8 sm:mt-0">
+        {/* Team 1 */}
         <div className="glass-strong rounded-lg p-3 md:p-4 border border-blue-500/20">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-2">
             <div>
               <div className="text-xs md:text-sm text-gray-400 font-medium uppercase tracking-wide">Team 1</div>
               <div className="text-2xl md:text-3xl font-bold text-blue-400 mt-1">
@@ -421,10 +447,55 @@ export default function GameScreen() {
             </div>
             <Trophy className="w-6 h-6 md:w-8 md:h-8 text-blue-400 opacity-50" />
           </div>
+          {/* Team 1 Players */}
+          <div className="mt-2 pt-2 border-t border-blue-500/20">
+            <div className="text-xs text-gray-500 mb-1">Players:</div>
+            <div className="flex flex-wrap gap-1">
+              {gameState.teams[0].players.map((player, idx) => {
+                const isDescriber = gameState.currentTeamIndex === 0 && 
+                                   gameState.currentDescriberIndex[0] === idx
+                const isMenuOpen = showHostMenu?.teamIndex === 0 && showHostMenu?.playerIndex === idx
+                return (
+                  <div key={player} className="relative">
+                    <button
+                      onClick={() => isHost ? setShowHostMenu(isMenuOpen ? null : { teamIndex: 0, playerIndex: idx }) : null}
+                      disabled={!isHost || player === playerName}
+                      className={`text-xs px-2 py-0.5 rounded ${
+                        isDescriber 
+                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' 
+                          : 'bg-blue-500/10 text-blue-300'
+                      } ${isHost && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
+                    >
+                      {player}{isDescriber ? ' 📢' : ''}{player === playerName ? ' (you)' : ''}
+                    </button>
+                    
+                    {/* Host Menu */}
+                    {isHost && isMenuOpen && player !== playerName && (
+                      <div className="absolute top-full left-0 mt-1 z-30 glass-strong rounded-lg border border-white/20 overflow-hidden shadow-xl min-w-[140px]">
+                        <button
+                          onClick={() => handleMakeDescriber(0, idx)}
+                          className="w-full px-3 py-2 text-left text-xs hover:bg-purple-500/20 text-purple-300 transition-colors"
+                        >
+                          📢 Make Describer
+                        </button>
+                        <button
+                          onClick={() => handleKickPlayer(player)}
+                          className="w-full px-3 py-2 text-left text-xs hover:bg-red-500/20 text-red-400 transition-colors"
+                        >
+                          ❌ Kick Player
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </div>
 
+        {/* Team 2 */}
         <div className="glass-strong rounded-lg p-3 md:p-4 border border-red-500/20">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-2">
             <div>
               <div className="text-xs md:text-sm text-gray-400 font-medium uppercase tracking-wide">Team 2</div>
               <div className="text-2xl md:text-3xl font-bold text-red-400 mt-1">
@@ -432,6 +503,50 @@ export default function GameScreen() {
               </div>
             </div>
             <Trophy className="w-6 h-6 md:w-8 md:h-8 text-red-400 opacity-50" />
+          </div>
+          {/* Team 2 Players */}
+          <div className="mt-2 pt-2 border-t border-red-500/20">
+            <div className="text-xs text-gray-500 mb-1">Players:</div>
+            <div className="flex flex-wrap gap-1">
+              {gameState.teams[1].players.map((player, idx) => {
+                const isDescriber = gameState.currentTeamIndex === 1 && 
+                                   gameState.currentDescriberIndex[1] === idx
+                const isMenuOpen = showHostMenu?.teamIndex === 1 && showHostMenu?.playerIndex === idx
+                return (
+                  <div key={player} className="relative">
+                    <button
+                      onClick={() => isHost ? setShowHostMenu(isMenuOpen ? null : { teamIndex: 1, playerIndex: idx }) : null}
+                      disabled={!isHost || player === playerName}
+                      className={`text-xs px-2 py-0.5 rounded ${
+                        isDescriber 
+                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' 
+                          : 'bg-red-500/10 text-red-300'
+                      } ${isHost && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
+                    >
+                      {player}{isDescriber ? ' 📢' : ''}{player === playerName ? ' (you)' : ''}
+                    </button>
+                    
+                    {/* Host Menu */}
+                    {isHost && isMenuOpen && player !== playerName && (
+                      <div className="absolute top-full left-0 mt-1 z-30 glass-strong rounded-lg border border-white/20 overflow-hidden shadow-xl min-w-[140px]">
+                        <button
+                          onClick={() => handleMakeDescriber(1, idx)}
+                          className="w-full px-3 py-2 text-left text-xs hover:bg-purple-500/20 text-purple-300 transition-colors"
+                        >
+                          📢 Make Describer
+                        </button>
+                        <button
+                          onClick={() => handleKickPlayer(player)}
+                          className="w-full px-3 py-2 text-left text-xs hover:bg-red-500/20 text-red-400 transition-colors"
+                        >
+                          ❌ Kick Player
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
       </div>
