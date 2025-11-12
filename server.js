@@ -456,15 +456,132 @@ io.on("connection", (socket) => {
 		}
 	});
 
-	// Leave game / return to lobby
+	// Leave game / return to lobby (for individual player, not ending the entire game)
 	socket.on("leave-game", (data) => {
 		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
 
 		if (room) {
-			room.started = false;
-			room.gameState = null;
-			io.to(roomCode).emit("game-left", { room });
+			const playerIndex = room.players.findIndex((p) => p.id === socket.id);
+			if (playerIndex !== -1) {
+				const wasHost = room.host === socket.id;
+				const leavingPlayer = room.players[playerIndex];
+
+				// Remove player from room
+				room.players.splice(playerIndex, 1);
+
+				// Transfer host if needed
+				if (wasHost && room.players.length > 0) {
+					room.host = room.players[0].id;
+					console.log(
+						`Host transferred in room ${roomCode}: ${room.players[0].name}`
+					);
+					io.to(roomCode).emit("host-changed", {
+						newHost: room.players[0].name,
+						hostId: room.players[0].id,
+						room,
+					});
+				}
+
+				// If room is empty, delete it
+				if (room.players.length === 0) {
+					gameRooms.delete(roomCode);
+					console.log(`Room ${roomCode} deleted (empty after leave)`);
+				} else {
+					// Remove player from teams if game has started
+					if (room.gameState) {
+						let describerLeft = false;
+						const currentTeamIndex = room.gameState.currentTeamIndex;
+
+						room.gameState.teams.forEach((team, teamIndex) => {
+							const teamPlayerIndex = team.players.indexOf(leavingPlayer.name);
+							if (teamPlayerIndex !== -1) {
+								// Check if the leaving player is the current describer
+								if (
+									teamIndex === currentTeamIndex &&
+									room.gameState.currentDescriberIndex[teamIndex] ===
+										teamPlayerIndex
+								) {
+									describerLeft = true;
+								}
+
+								team.players.splice(teamPlayerIndex, 1);
+
+								// Adjust describer index
+								if (
+									room.gameState.currentDescriberIndex[teamIndex] !== undefined
+								) {
+									if (
+										teamPlayerIndex <=
+										room.gameState.currentDescriberIndex[teamIndex]
+									) {
+										room.gameState.currentDescriberIndex[teamIndex] = Math.max(
+											0,
+											room.gameState.currentDescriberIndex[teamIndex] - 1
+										);
+									}
+									// Ensure describer index is within bounds
+									if (
+										team.players.length > 0 &&
+										room.gameState.currentDescriberIndex[teamIndex] >=
+											team.players.length
+									) {
+										room.gameState.currentDescriberIndex[teamIndex] = 0;
+									}
+								}
+							}
+						});
+
+						// Check if any team is now empty
+						const team0Empty = room.gameState.teams[0].players.length === 0;
+						const team1Empty = room.gameState.teams[1].players.length === 0;
+
+						// If current team is empty, notify
+						if (
+							room.gameState.teams[currentTeamIndex].players.length === 0 &&
+							room.gameState.gameStarted
+						) {
+							if (team0Empty && team1Empty) {
+								io.to(roomCode).emit("game-over", {
+									gameState: room.gameState,
+									message: "All players left. Game ended.",
+								});
+								room.gameState = null;
+								room.started = false;
+							} else {
+								const otherTeamIndex = currentTeamIndex === 0 ? 1 : 0;
+								if (room.gameState.teams[otherTeamIndex].players.length > 0) {
+									io.to(roomCode).emit("team-empty-skip", {
+										message: `${room.gameState.teams[currentTeamIndex].name} has no players left. Continuing with ${room.gameState.teams[otherTeamIndex].name}.`,
+										gameState: room.gameState,
+									});
+								}
+							}
+						}
+
+						// If describer left during active turn, notify
+						if (describerLeft && room.gameState.gameStarted) {
+							const team = room.gameState.teams[currentTeamIndex];
+							if (team.players.length > 0) {
+								io.to(roomCode).emit("describer-left", {
+									message: "Describer left the game. Moving to next teammate.",
+									gameState: room.gameState,
+								});
+							}
+						}
+					}
+
+					// Notify others that player left
+					io.to(roomCode).emit("player-left", {
+						socketId: socket.id,
+						playerName: leavingPlayer.name,
+						room,
+						gameState: room.gameState,
+					});
+
+					console.log(`${leavingPlayer.name} left room ${roomCode}`);
+				}
+			}
 		}
 	});
 
@@ -666,6 +783,35 @@ io.on("connection", (socket) => {
 								}
 							}
 						});
+
+						// Check if any team is now empty
+						const team0Empty = room.gameState.teams[0].players.length === 0;
+						const team1Empty = room.gameState.teams[1].players.length === 0;
+
+						// If current team is empty, move to next team
+						if (
+							room.gameState.teams[currentTeamIndex].players.length === 0 &&
+							room.gameState.gameStarted
+						) {
+							// If both teams are empty, end the game
+							if (team0Empty && team1Empty) {
+								io.to(roomCode).emit("game-over", {
+									gameState: room.gameState,
+									message: "All players left. Game ended.",
+								});
+								room.gameState = null;
+								room.started = false;
+							} else {
+								// Move to the next team that has players
+								const otherTeamIndex = currentTeamIndex === 0 ? 1 : 0;
+								if (room.gameState.teams[otherTeamIndex].players.length > 0) {
+									io.to(roomCode).emit("team-empty-skip", {
+										message: `${room.gameState.teams[currentTeamIndex].name} has no players left. Continuing with ${room.gameState.teams[otherTeamIndex].name}.`,
+										gameState: room.gameState,
+									});
+								}
+							}
+						}
 
 						// If describer left during active turn, notify players
 						if (describerLeft && room.gameState.gameStarted) {

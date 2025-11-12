@@ -196,6 +196,17 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
     })
 
+    newSocket.on('host-changed', (data) => {
+      setPlayers(data.room.players)
+      // Update isHost status for the new host
+      const isNewHost = data.hostId === newSocket.id
+      setIsHost(isNewHost)
+      console.log(`New host: ${data.newHost}`)
+      if (isNewHost) {
+        alert(`You are now the host of the room!`)
+      }
+    })
+
     newSocket.on('team-updated', (data) => {
       setPlayers(data.room.players)
     })
@@ -247,10 +258,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
     newSocket.on('game-over', (data) => {
       setGameState(data.gameState)
       setCurrentScreen('gameover')
-    })
-
-    newSocket.on('game-left', (data) => {
-      setCurrentScreen('lobby')
     })
 
     newSocket.on('host-left', (data) => {

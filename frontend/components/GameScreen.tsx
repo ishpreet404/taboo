@@ -148,6 +148,17 @@ export default function GameScreen() {
       }
     }
 
+    const handleTeamEmptySkip = (data: any) => {
+      alert(data.message)
+      // Game continues with the other team
+      setGamePhase('turn-start')
+      setGuessedWords([])
+      setGuessedByPlayer([])
+      setWrongGuesses([])
+      setTimeRemaining(60)
+      setTurnActive(false)
+    }
+
     socket.on('word-guessed-sync', handleWordGuessed)
     socket.on('turn-started', handleTurnStarted)
     socket.on('turn-ended', handleTurnEnded)
@@ -158,6 +169,7 @@ export default function GameScreen() {
     socket.on('describer-skipped', handleDescriberSkipped)
     socket.on('wrong-guess-sync', handleWrongGuess)
     socket.on('describer-left', handleDescriberLeft)
+    socket.on('team-empty-skip', handleTeamEmptySkip)
 
     return () => {
       socket.off('word-guessed-sync', handleWordGuessed)
@@ -170,6 +182,7 @@ export default function GameScreen() {
       socket.off('describer-skipped', handleDescriberSkipped)
       socket.off('wrong-guess-sync', handleWrongGuess)
       socket.off('describer-left', handleDescriberLeft)
+      socket.off('team-empty-skip', handleTeamEmptySkip)
     }
   }, [socket])
 
@@ -686,13 +699,13 @@ export default function GameScreen() {
           {isMyTurn && (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 sm:gap-2 md:gap-3">
               {currentWords.map((wordObj, index) => {
-                const isGuessed = guessedWords.includes(wordObj)
+                const isGuessed = guessedWords.some(w => w.word === wordObj.word)
                 
                 return (
                   <div
                     key={`${wordObj.word}-${index}`}
                     className={`glass-strong rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border ${getDifficultyColor(wordObj.difficulty)} ${
-                      isGuessed ? 'opacity-30 line-through' : 'transition-opacity'
+                      isGuessed ? 'opacity-30 line-through bg-green-500/20' : 'transition-opacity'
                     }`}
                   >
                     <div className="text-center">
@@ -771,13 +784,13 @@ export default function GameScreen() {
               {/* Words Grid for watchers - Read only */}
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 sm:gap-2 md:gap-3">
                 {currentWords.map((wordObj, index) => {
-                  const isGuessed = guessedWords.includes(wordObj)
+                  const isGuessed = guessedWords.some(w => w.word === wordObj.word)
                   
                   return (
                     <div
                       key={`${wordObj.word}-${index}`}
                       className={`glass-strong rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border ${getDifficultyColor(wordObj.difficulty)} ${
-                        isGuessed ? 'opacity-30 line-through' : ''
+                        isGuessed ? 'opacity-30 line-through bg-green-500/20' : ''
                       }`}
                     >
                       <div className="text-center">
