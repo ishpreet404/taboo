@@ -90,18 +90,22 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const initDiscord = async () => {
       if (isDiscordActivity()) {
         try {
+          console.log('Initializing Discord SDK...')
           const sdk = await setupDiscordSdk()
           if (sdk) {
-            console.log('Discord Activity initialized')
+            console.log('Discord Activity initialized successfully')
             // Get Discord user info and auto-set player name
             const user = await getDiscordUser()
             if (user) {
               setPlayerName(user.username)
-              console.log('Discord user:', user.username)
+              console.log('Discord user logged in:', user.username)
             }
+          } else {
+            console.warn('Discord SDK setup returned null - running in fallback mode')
           }
         } catch (error) {
           console.error('Discord initialization failed:', error)
+          console.log('Continuing in non-Discord mode')
         }
       }
     }
@@ -116,8 +120,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const newSocket = io(serverUrl, {
       transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
+      timeout: 20000,
+      forceNew: true, // Force new connection each time
     })
 
     newSocket.on('connect', () => {

@@ -24,13 +24,22 @@ export async function setupDiscordSdk() {
     console.log('Discord SDK ready');
     
     // Authenticate with Discord
-    const { code } = await discordSdk.commands.authorize({
+    const authResult = await discordSdk.commands.authorize({
       client_id: clientId,
       response_type: 'code',
       state: '',
       prompt: 'none',
       scope: ['identify', 'guilds'],
+    }).catch(err => {
+      console.error('Authorization failed:', err);
+      return null;
     });
+
+    if (!authResult || !authResult.code) {
+      console.warn('No authorization code received, skipping token exchange');
+      isInitialized = true;
+      return discordSdk;
+    }
 
     console.log('Got authorization code');
 
@@ -38,25 +47,37 @@ export async function setupDiscordSdk() {
     const response = await fetch('/api/discord/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code: authResult.code }),
+    }).catch(err => {
+      console.error('Token exchange request failed:', err);
+      return null;
     });
 
-    if (!response.ok) {
-      throw new Error('Failed to exchange token');
+    if (!response || !response.ok) {
+      console.warn('Token exchange failed, continuing without authentication');
+      isInitialized = true;
+      return discordSdk;
     }
 
     const { access_token } = await response.json();
     
     // Authenticate with Discord SDK
-    const auth = await discordSdk.commands.authenticate({ access_token });
+    const auth = await discordSdk.commands.authenticate({ access_token }).catch(err => {
+      console.error('Authentication failed:', err);
+      return null;
+    });
     
-    console.log('Discord authenticated:', auth.user.username);
+    if (auth) {
+      console.log('Discord authenticated:', auth.user?.username);
+    }
     
     isInitialized = true;
     return discordSdk;
   } catch (error) {
     console.error('Discord SDK setup failed:', error);
-    return null;
+    // Still return the SDK even if auth failed, as basic functionality may work
+    isInitialized = true;
+    return discordSdk;
   }
 }
 
