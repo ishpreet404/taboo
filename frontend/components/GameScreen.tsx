@@ -697,36 +697,55 @@ export default function GameScreen() {
 
           {/* Words Grid - Only visible to describer */}
           {isMyTurn && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 sm:gap-2 md:gap-3">
-              {currentWords.map((wordObj, index) => {
-                const isGuessed = guessedWords.some(w => w.word === wordObj.word)
-                
-                return (
-                  <div
-                    key={`${wordObj.word}-${index}`}
-                    className={`glass-strong rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border ${getDifficultyColor(wordObj.difficulty)} ${
-                      isGuessed ? 'opacity-30 line-through bg-green-500/20' : 'transition-opacity'
-                    }`}
-                  >
-                    <div className="text-center">
-                      <div className="flex items-center justify-center gap-1.5 mb-1.5">
-                        <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${getDifficultyBadge(wordObj.difficulty).color}`}>
-                          {getDifficultyBadge(wordObj.difficulty).label}
-                        </span>
-                        <span className={`text-[10px] font-semibold ${getDifficultyBadge(wordObj.difficulty).color.split(' ')[0]}`}>
-                          {wordObj.difficulty.toUpperCase()}
-                        </span>
-                      </div>
-                      <div className="font-bold text-sm sm:text-base md:text-lg lg:text-xl mb-1 sm:mb-2 break-words">{wordObj.word}</div>
-                      <div className="mt-1 sm:mt-2 text-[10px] sm:text-xs md:text-sm font-semibold flex items-center justify-center gap-0.5 sm:gap-1">
-                        <Zap className="w-2.5 h-2.5 sm:w-3 sm:h-3 opacity-60" />
-                        {wordObj.points}pts
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 sm:gap-2 md:gap-3">
+                {currentWords.map((wordObj, index) => {
+                  const isGuessed = guessedWords.some(w => w.word === wordObj.word)
+                  
+                  return (
+                    <div
+                      key={`${wordObj.word}-${index}`}
+                      className={`glass-strong rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border ${getDifficultyColor(wordObj.difficulty)} ${
+                        isGuessed ? 'opacity-30 line-through bg-green-500/20' : 'transition-opacity'
+                      }`}
+                    >
+                      <div className="text-center">
+                        <div className="flex items-center justify-center gap-1.5 mb-1.5">
+                          <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${getDifficultyBadge(wordObj.difficulty).color}`}>
+                            {getDifficultyBadge(wordObj.difficulty).label}
+                          </span>
+                          <span className={`text-[10px] font-semibold ${getDifficultyBadge(wordObj.difficulty).color.split(' ')[0]}`}>
+                            {wordObj.difficulty.toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="font-bold text-sm sm:text-base md:text-lg lg:text-xl mb-1 sm:mb-2 break-words">{wordObj.word}</div>
+                        <div className="mt-1 sm:mt-2 text-[10px] sm:text-xs md:text-sm font-semibold flex items-center justify-center gap-0.5 sm:gap-1">
+                          <Zap className="w-2.5 h-2.5 sm:w-3 sm:h-3 opacity-60" />
+                          {wordObj.points}pts
+                        </div>
                       </div>
                     </div>
+                  )
+                })}
+              </div>
+
+              {/* Wrong Guesses Display for Describer */}
+              {wrongGuesses.length > 0 && (
+                <div className="glass-strong rounded-lg sm:rounded-xl p-3 sm:p-4 border border-red-500/30">
+                  <div className="text-xs sm:text-sm text-red-400 font-semibold mb-2">Wrong Guesses:</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {wrongGuesses.map((wrong, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 sm:px-3 py-1 sm:py-1.5 bg-red-500/20 border border-red-500/40 rounded text-xs sm:text-sm text-red-300 font-medium"
+                      >
+                        {wrong.word} <span className="text-red-400/60">({wrong.guesser})</span>
+                      </span>
+                    ))}
                   </div>
-                )
-              })}
-            </div>
+                </div>
+              )}
+            </>
           )}
 
           {/* Guess Input - Only for team members who are guessing */}
