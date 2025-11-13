@@ -304,8 +304,7 @@ export default function GameScreen() {
   }
 
   const handleGuess = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const input = e.target.value.toUpperCase()
-    setGuess(input)
+    setGuess(e.target.value)
   }
 
   const submitGuess = () => {
@@ -317,7 +316,7 @@ export default function GameScreen() {
 
     let foundMatch = false
     for (const wordObj of currentWords) {
-      if (guessedWords.includes(wordObj)) continue
+      if (guessedWords.some(w => w.word === wordObj.word)) continue
 
       if (input === wordObj.word) {
         foundMatch = true
@@ -759,6 +758,10 @@ export default function GameScreen() {
                   onKeyPress={handleKeyPress}
                   placeholder="Type your guess..."
                   className="flex-1 px-3 sm:px-4 md:px-6 py-2.5 sm:py-3 md:py-4 bg-white/10 border border-white/20 rounded-lg sm:rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 text-white placeholder-gray-400 text-base sm:text-lg md:text-xl text-center font-bold uppercase transition-all"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="characters"
+                  spellCheck="false"
                   autoFocus
                 />
                 <button
