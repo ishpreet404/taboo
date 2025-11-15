@@ -704,16 +704,15 @@ io.on("connection", (socket) => {
 		const room = gameRooms.get(roomCode);
 
 		if (room && room.host === socket.id && room.gameState) {
-			const gs = room.gameState;
-
 			// Emit game over with admin message
 			io.to(roomCode).emit("game-over", {
-				teams: gs.teams,
+				gameState: room.gameState,
 				message: "Game ended by host",
 			});
 
 			// Clear game state
 			room.gameState = null;
+			room.started = false;
 			console.log(`Host ended game in room ${roomCode}`);
 		}
 	});
@@ -735,10 +734,11 @@ io.on("connection", (socket) => {
 				if (gs.round > gs.maxRounds) {
 					// Game over
 					io.to(roomCode).emit("game-over", {
-						teams: gs.teams,
+						gameState: gs,
 						message: "Maximum rounds reached",
 					});
 					room.gameState = null;
+					room.started = false;
 					return;
 				}
 			}
