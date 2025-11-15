@@ -1006,7 +1006,7 @@ export default function GameScreen() {
                         key={idx}
                         className="px-2 py-1 bg-red-500/20 border border-red-500/40 rounded text-xs text-red-300"
                       >
-                        {wrong.word}
+                        {wrong.word} <span className="text-red-400/60">({wrong.guesser})</span>
                       </span>
                     ))}
                   </div>
@@ -1058,6 +1058,23 @@ export default function GameScreen() {
                   )
                 })}
               </div>
+
+              {/* Wrong Guesses Display for Opposite Team */}
+              {wrongGuesses.length > 0 && (
+                <div className="glass-strong rounded-lg sm:rounded-xl p-3 sm:p-4 border border-red-500/30">
+                  <div className="text-xs sm:text-sm text-red-400 font-semibold mb-2">Wrong Guesses:</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {wrongGuesses.map((wrong, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 sm:px-3 py-1 sm:py-1.5 bg-red-500/20 border border-red-500/40 rounded text-xs sm:text-sm text-red-300 font-medium"
+                      >
+                        {wrong.word} <span className="text-red-400/60">({wrong.guesser})</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           )}
 
