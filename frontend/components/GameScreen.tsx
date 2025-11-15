@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useGame } from './GameContext'
-import { Clock, Trophy, Zap, LogOut, Users } from 'lucide-react'
+import { Clock, Trophy, Zap, LogOut, Users, Settings, UserX, Shield, SkipForward } from 'lucide-react'
 import { wordDatabase } from '@/lib/wordDatabase'
 
 export default function GameScreen() {
@@ -17,6 +17,7 @@ export default function GameScreen() {
   const [timeRemaining, setTimeRemaining] = useState(60)
   const [turnActive, setTurnActive] = useState(false)
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
+  const [showAdminPanel, setShowAdminPanel] = useState(false)
   const [showBonusNotification, setShowBonusNotification] = useState(false)
   const [bonusWordCount, setBonusWordCount] = useState(0)
   const [usedWordIndices, setUsedWordIndices] = useState<Set<number>>(new Set())
@@ -308,6 +309,41 @@ export default function GameScreen() {
     setGuess(input)
   }
 
+  // Calculate Levenshtein distance (edit distance) between two strings
+  const calculateSimilarity = (str1: string, str2: string): number => {
+    const len1 = str1.length
+    const len2 = str2.length
+    const matrix: number[][] = []
+
+    // Initialize matrix
+    for (let i = 0; i <= len1; i++) {
+      matrix[i] = [i]
+    }
+    for (let j = 0; j <= len2; j++) {
+      matrix[0][j] = j
+    }
+
+    // Fill matrix
+    for (let i = 1; i <= len1; i++) {
+      for (let j = 1; j <= len2; j++) {
+        if (str1[i - 1] === str2[j - 1]) {
+          matrix[i][j] = matrix[i - 1][j - 1]
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1, // substitution
+            matrix[i][j - 1] + 1,     // insertion
+            matrix[i - 1][j] + 1      // deletion
+          )
+        }
+      }
+    }
+
+    const distance = matrix[len1][len2]
+    const maxLen = Math.max(len1, len2)
+    const similarity = ((maxLen - distance) / maxLen) * 100
+    return similarity
+  }
+
   const submitGuess = () => {
     // Only allow guesses from team members who are guessing
     if (!isGuesser) return
@@ -316,16 +352,19 @@ export default function GameScreen() {
     if (input.length === 0) return
 
     let foundMatch = false
+    let partialMatch: { wordObj: any; similarity: number } | null = null
+
     for (const wordObj of currentWords) {
       if (guessedWords.includes(wordObj)) continue
 
+      // Check for exact match
       if (input === wordObj.word) {
         foundMatch = true
         const newGuessed = [...guessedWords, wordObj]
         setGuessedWords(newGuessed)
         setGuess('')
         
-        // Emit to server with full wordObj
+        // Emit to server with full wordObj and full points
         socket?.emit('word-guessed', { 
           roomCode, 
           word: wordObj.word, 
@@ -355,9 +394,58 @@ export default function GameScreen() {
         }
         break
       }
+
+      // Check for partial match (90% or more similarity)
+      const similarity = calculateSimilarity(input, wordObj.word)
+      if (similarity >= 90 && (!partialMatch || similarity > partialMatch.similarity)) {
+        partialMatch = { wordObj, similarity }
+      }
     }
 
-    // If no match found, it's a wrong guess
+    // If exact match was found, we're done
+    if (foundMatch) return
+
+    // If partial match found (90%+ similarity), award partial points
+    if (partialMatch) {
+      const partialPoints = Math.ceil(partialMatch.wordObj.points * 0.7) // 70% of points for partial match
+      const newGuessed = [...guessedWords, partialMatch.wordObj]
+      setGuessedWords(newGuessed)
+      setGuess('')
+      
+      // Emit to server with partial points
+      socket?.emit('word-guessed', { 
+        roomCode, 
+        word: partialMatch.wordObj.word, 
+        wordObj: { ...partialMatch.wordObj, points: partialPoints },
+        guesser: playerName,
+        points: partialPoints,
+        partial: true,
+        actualGuess: input
+      })
+      
+      // Show notification about partial match
+      alert(`Close enough! "${input}" → "${partialMatch.wordObj.word}" (${partialPoints} points)`)
+      
+      // Dynamic bonus system
+      const nextMilestone = bonusMilestones.find(m => m === newGuessed.length)
+      if (nextMilestone) {
+        const bonusCount = 3 + Math.floor(bonusMilestones.indexOf(nextMilestone) / 2)
+        const bonusWords = selectWords(bonusCount)
+        setCurrentWords([...currentWords, ...bonusWords])
+        setBonusWordCount(bonusCount)
+        setShowBonusNotification(true)
+        setTimeout(() => setShowBonusNotification(false), 3000)
+        socket?.emit('bonus-words-added', { roomCode, words: bonusWords })
+      }
+      
+      const remaining = currentWords.length - newGuessed.length
+      if (remaining <= 2 && !nextMilestone) {
+        setCurrentWords([...currentWords, ...selectWords(5)])
+      }
+      return
+    }
+
+    // If no match found at all, it's a wrong guess
     if (!foundMatch && input.length > 0) {
       setGuess('')
       socket?.emit('wrong-guess', {
@@ -445,13 +533,51 @@ export default function GameScreen() {
     setShowHostMenu(null)
   }
 
+  const handleEndGame = () => {
+    if (!isHost) return
+    if (confirm('Are you sure you want to end the game for everyone?')) {
+      socket?.emit('admin-end-game', { roomCode })
+      setShowAdminPanel(false)
+    }
+  }
+
+  const handleAdminSkipTurn = () => {
+    if (!isHost) return
+    if (confirm('Skip the current turn and move to the next team?')) {
+      socket?.emit('admin-skip-turn', { roomCode })
+      setShowAdminPanel(false)
+    }
+  }
+
+  const handlePauseTimer = () => {
+    if (!isHost) return
+    socket?.emit('admin-pause-timer', { roomCode })
+  }
+
+  const handleResumeTimer = () => {
+    if (!isHost) return
+    socket?.emit('admin-resume-timer', { roomCode })
+  }
+
   return (
-    <div className="space-y-3 md:space-y-4 lg:space-y-6 relative px-2 sm:px-0">
-      {/* Leave Game Button - Top Right */}
-      <div className="absolute -top-2 right-0 z-20">
+    <div className="space-y-3 md:space-y-4 lg:space-y-6 px-2 sm:px-0">
+      {/* Top Right Controls - Fixed Position */}
+      <div className="fixed top-4 right-4 z-50 flex gap-2">
+        {/* Admin Panel Button (Host Only) */}
+        {isHost && (
+          <button
+            onClick={() => setShowAdminPanel(true)}
+            className="px-3 sm:px-4 md:px-5 py-2 sm:py-2.5 glass-strong rounded-lg md:rounded-xl hover:bg-purple-500/20 transition-colors flex items-center gap-2 text-purple-400 text-sm md:text-base font-medium border border-purple-500/30 hover:border-purple-500/50 shadow-lg"
+          >
+            <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span className="hidden sm:inline">Admin</span>
+          </button>
+        )}
+        
+        {/* Leave Game Button */}
         <button
           onClick={() => setShowLeaveConfirm(true)}
-          className="px-3 sm:px-4 md:px-5 py-2 sm:py-2.5 glass-strong rounded-lg md:rounded-xl hover:bg-red-500/20 transition-colors flex items-center gap-2 text-red-400 text-sm md:text-base font-medium border border-red-500/30 hover:border-red-500/50"
+          className="px-3 sm:px-4 md:px-5 py-2 sm:py-2.5 glass-strong rounded-lg md:rounded-xl hover:bg-red-500/20 transition-colors flex items-center gap-2 text-red-400 text-sm md:text-base font-medium border border-red-500/30 hover:border-red-500/50 shadow-lg"
         >
           <LogOut className="w-4 h-4 sm:w-5 sm:h-5" />
           <span>Leave Game</span>
@@ -484,6 +610,107 @@ export default function GameScreen() {
                 className="flex-1 px-6 py-3 glass-strong hover:bg-white/5 border border-white/10 rounded-xl transition-colors font-semibold"
               >
                 Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Panel Modal */}
+      {showAdminPanel && isHost && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setShowAdminPanel(false)}
+        >
+          <div
+            className="glass-strong rounded-2xl p-6 md:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-6">
+              <Shield className="w-7 h-7 text-purple-400" />
+              <h3 className="text-2xl md:text-3xl font-bold">Admin Panel</h3>
+            </div>
+
+            {/* Player Management Section */}
+            <div className="mb-6">
+              <h4 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                <Users className="w-5 h-5 text-blue-400" />
+                Player Management
+              </h4>
+              <div className="space-y-2">
+                {gameState.teams.map((team, teamIndex) => (
+                  <div key={teamIndex} className="glass rounded-lg p-4">
+                    <h5 className={`font-semibold mb-2 text-sm ${teamIndex === 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                      {team.name}
+                    </h5>
+                    <div className="space-y-2">
+                      {team.players.map((player, playerIndex) => (
+                        <div
+                          key={playerIndex}
+                          className="flex items-center justify-between glass-strong rounded-lg p-3"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm">{player}</span>
+                            {gameState.currentDescriberIndex?.[teamIndex] === playerIndex && (
+                              <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full">
+                                Describer
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleMakeDescriber(teamIndex, playerIndex)}
+                              className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-yellow-500/20 transition-colors text-yellow-400 border border-yellow-500/30"
+                            >
+                              Make Describer
+                            </button>
+                            <button
+                              onClick={() => handleKickPlayer(player)}
+                              className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-red-500/20 transition-colors text-red-400 border border-red-500/30 flex items-center gap-1"
+                            >
+                              <UserX className="w-3 h-3" />
+                              Kick
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Game Controls Section */}
+            <div className="mb-6">
+              <h4 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                <Zap className="w-5 h-5 text-yellow-400" />
+                Game Controls
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={handleAdminSkipTurn}
+                  className="px-4 py-3 glass-strong rounded-lg hover:bg-blue-500/20 transition-colors flex items-center justify-center gap-2 text-blue-400 border border-blue-500/30"
+                >
+                  <SkipForward className="w-5 h-5" />
+                  Skip Turn
+                </button>
+                <button
+                  onClick={handleEndGame}
+                  className="px-4 py-3 glass-strong rounded-lg hover:bg-red-500/20 transition-colors flex items-center justify-center gap-2 text-red-400 border border-red-500/30"
+                >
+                  <Trophy className="w-5 h-5" />
+                  End Game
+                </button>
+              </div>
+            </div>
+
+            {/* Close Button */}
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowAdminPanel(false)}
+                className="px-6 py-3 glass-strong hover:bg-white/10 border border-white/10 rounded-xl transition-colors font-semibold"
+              >
+                Close
               </button>
             </div>
           </div>

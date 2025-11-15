@@ -698,6 +698,63 @@ io.on("connection", (socket) => {
 		}
 	});
 
+	// Admin: End game
+	socket.on("admin-end-game", (data) => {
+		const { roomCode } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id && room.gameState) {
+			const gs = room.gameState;
+
+			// Emit game over with admin message
+			io.to(roomCode).emit("game-over", {
+				teams: gs.teams,
+				message: "Game ended by host",
+			});
+
+			// Clear game state
+			room.gameState = null;
+			console.log(`Host ended game in room ${roomCode}`);
+		}
+	});
+
+	// Admin: Skip turn
+	socket.on("admin-skip-turn", (data) => {
+		const { roomCode } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id && room.gameState) {
+			const gs = room.gameState;
+
+			// Move to next team
+			gs.currentTeamIndex = (gs.currentTeamIndex + 1) % gs.teams.length;
+
+			// Check if we completed a round
+			if (gs.currentTeamIndex === 0) {
+				gs.round++;
+				if (gs.round > gs.maxRounds) {
+					// Game over
+					io.to(roomCode).emit("game-over", {
+						teams: gs.teams,
+						message: "Maximum rounds reached",
+					});
+					room.gameState = null;
+					return;
+				}
+			}
+
+			// Emit turn skipped
+			io.to(roomCode).emit("turn-skipped", {
+				gameState: gs,
+				message: `Turn skipped by host. It's now ${
+					gs.teams[gs.currentTeamIndex].name
+				}'s turn!`,
+			});
+
+			console.log(`Host skipped turn in room ${roomCode}`);
+		}
+	});
+
 	// Chat message
 	socket.on("chat-message", (data) => {
 		const { roomCode, message, playerName } = data;

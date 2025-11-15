@@ -255,6 +255,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setGameState(data.gameState)
     })
 
+    newSocket.on('turn-skipped', (data) => {
+      setGameState(data.gameState)
+      if (data.message) {
+        alert(data.message)
+      }
+    })
+
     newSocket.on('game-over', (data) => {
       setGameState(data.gameState)
       setCurrentScreen('gameover')
