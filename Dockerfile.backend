@@ -1,0 +1,19 @@
+# Backend Dockerfile for Taboo Game
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Copy server file
+COPY server.js ./
+
+# Expose the port the app runs on
+EXPOSE 3000
+
+# Start the server
+CMD ["node", "server.js"]
