@@ -1,8 +1,8 @@
 'use client'
 
-import { useGame } from './GameContext'
 import { motion } from 'framer-motion'
-import { Copy, Crown, Play, ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Copy, Crown, Play } from 'lucide-react'
+import { useGame } from './GameContext'
 
 export default function LobbyScreen() {
   const { roomCode, players, isHost, myTeam, joinTeam, startGame, playerName, setCurrentScreen } = useGame()
@@ -62,14 +62,13 @@ export default function LobbyScreen() {
             <h2 className="text-xl md:text-2xl font-bold text-blue-400">Team 1</h2>
             <span className="text-gray-400 text-sm md:text-base">{team1.length} players</span>
           </div>
-          
+
           <div className="space-y-2 md:space-y-3 mb-4 min-h-[150px] md:min-h-[200px]">
             {team1.map((player) => (
               <div
                 key={player.id}
-                className={`glass rounded-xl p-3 md:p-4 flex items-center gap-2 md:gap-3 ${
-                  player.name === playerName ? 'ring-2 ring-blue-400' : ''
-                }`}
+                className={`glass rounded-xl p-3 md:p-4 flex items-center gap-2 md:gap-3 ${player.name === playerName ? 'ring-2 ring-blue-400' : ''
+                  }`}
               >
                 <div className="w-8 h-8 md:w-10 md:h-10 bg-blue-500 rounded-full flex items-center justify-center font-bold text-sm md:text-base">
                   {player.name.charAt(0).toUpperCase()}
@@ -80,14 +79,16 @@ export default function LobbyScreen() {
             ))}
           </div>
 
-          {myTeam !== 0 && (
-            <button
-              onClick={() => joinTeam(0)}
-              className="w-full py-2.5 md:py-3 px-4 md:px-6 bg-blue-500 hover:bg-blue-600 rounded-xl font-semibold transition-all transform hover:scale-105 text-sm md:text-base"
-            >
-              Join Team 1
-            </button>
-          )}
+          <button
+            onClick={() => joinTeam(0)}
+            disabled={myTeam === 0}
+            className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 0
+                ? 'bg-blue-500/50 cursor-not-allowed'
+                : 'bg-blue-500 hover:bg-blue-600 hover:scale-105'
+              }`}
+          >
+            {myTeam === 0 ? 'Current Team' : 'Join Team 1'}
+          </button>
         </motion.div>
 
         {/* Team 2 */}
@@ -101,14 +102,13 @@ export default function LobbyScreen() {
             <h2 className="text-xl md:text-2xl font-bold text-red-400">Team 2</h2>
             <span className="text-gray-400 text-sm md:text-base">{team2.length} players</span>
           </div>
-          
+
           <div className="space-y-2 md:space-y-3 mb-4 min-h-[150px] md:min-h-[200px]">
             {team2.map((player) => (
               <div
                 key={player.id}
-                className={`glass rounded-xl p-3 md:p-4 flex items-center gap-2 md:gap-3 ${
-                  player.name === playerName ? 'ring-2 ring-red-400' : ''
-                }`}
+                className={`glass rounded-xl p-3 md:p-4 flex items-center gap-2 md:gap-3 ${player.name === playerName ? 'ring-2 ring-red-400' : ''
+                  }`}
               >
                 <div className="w-8 h-8 md:w-10 md:h-10 bg-red-500 rounded-full flex items-center justify-center font-bold text-sm md:text-base">
                   {player.name.charAt(0).toUpperCase()}
@@ -119,14 +119,16 @@ export default function LobbyScreen() {
             ))}
           </div>
 
-          {myTeam !== 1 && (
-            <button
-              onClick={() => joinTeam(1)}
-              className="w-full py-2.5 md:py-3 px-4 md:px-6 bg-red-500 hover:bg-red-600 rounded-xl font-semibold transition-all transform hover:scale-105 text-sm md:text-base"
-            >
-              Join Team 2
-            </button>
-          )}
+          <button
+            onClick={() => joinTeam(1)}
+            disabled={myTeam === 1}
+            className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 1
+                ? 'bg-red-500/50 cursor-not-allowed'
+                : 'bg-red-500 hover:bg-red-600 hover:scale-105'
+              }`}
+          >
+            {myTeam === 1 ? 'Current Team' : 'Join Team 2'}
+          </button>
         </motion.div>
       </div>
 

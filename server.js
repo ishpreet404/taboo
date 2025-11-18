@@ -27,6 +27,36 @@ app.use(express.static("public"));
 // Game rooms storage
 const gameRooms = new Map();
 
+// Word database for bonus words
+const fs = require('fs');
+const wordList = fs.readFileSync(path.join(__dirname, 'wordlist.txt'), 'utf8')
+	.split('\n')
+	.filter(w => w.trim() && !w.startsWith('TABOO') && !w.startsWith('//'))
+	.map(w => w.trim());
+
+// Helper function to generate bonus words
+function generateBonusWords(count) {
+	const words = [];
+	const difficulties = ['easy', 'medium', 'hard'];
+	const usedIndices = new Set();
+
+	for (let i = 0; i < count; i++) {
+		let randomIndex;
+		do {
+			randomIndex = Math.floor(Math.random() * wordList.length);
+		} while (usedIndices.has(randomIndex));
+
+		usedIndices.add(randomIndex);
+		const word = wordList[randomIndex].trim().toUpperCase();
+		const difficulty = difficulties[Math.floor(Math.random() * difficulties.length)];
+		const points = difficulty === 'easy' ? 1 : difficulty === 'medium' ? 2 : 3;
+
+		words.push({ word, difficulty, points });
+	}
+
+	return words;
+}
+
 // Helper function to generate room code
 function generateRoomCode() {
 	return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -140,9 +170,19 @@ io.on("connection", (socket) => {
 			if (player) {
 				player.team = teamIndex;
 
-				// If game is in progress, also add player to the game state team
+				// If game is in progress, also update player in the game state teams
 				if (room.started && room.gameState) {
 					const teamName = room.gameState.teams[teamIndex].name;
+
+					// First, remove player from all teams
+					room.gameState.teams.forEach((team) => {
+						const playerIndex = team.players.indexOf(player.name);
+						if (playerIndex !== -1) {
+							team.players.splice(playerIndex, 1);
+						}
+					});
+
+					// Then add to the new team
 					if (!room.gameState.teams[teamIndex].players.includes(player.name)) {
 						room.gameState.teams[teamIndex].players.push(player.name);
 
@@ -151,13 +191,22 @@ io.on("connection", (socket) => {
 							room.gameState.currentDescriberIndex[teamIndex] = 0;
 						}
 
+						// Check if there's an active turn and send current turn state to the new player
+						const turnInProgress = room.gameState.currentWords && room.gameState.currentWords.length > 0;
+
 						io.to(roomCode).emit("team-updated-midgame", {
 							room,
 							gameState: room.gameState,
 							joinedPlayer: player.name,
 							joinedTeam: teamName,
+							turnInProgress: turnInProgress,
+							currentWords: turnInProgress ? room.gameState.currentWords : null,
+							timeRemaining: turnInProgress ? room.gameState.timeRemaining : null,
+							currentTurnGuessedWords: room.gameState.currentTurnGuessedWords || [],
+							currentTurnWrongGuesses: room.gameState.currentTurnWrongGuesses || [],
+							guessedByPlayer: room.gameState.guessedByPlayer || [],
 						});
-						console.log(`Player ${player.name} joined ${teamName} mid-game`);
+						console.log(`Player ${player.name} switched to ${teamName} mid-game`);
 						return;
 					}
 				}
@@ -192,7 +241,7 @@ io.on("connection", (socket) => {
 				currentWords: [],
 				currentTurnGuessedWords: [],
 				currentTurnWrongGuesses: [],
-				playerContributions: {},
+				playerContributions: {}, // { playerName: { points: 0, guessedWords: [], describedWords: [] } }
 			};
 
 			io.to(roomCode).emit("game-started", { gameState: room.gameState });
@@ -227,9 +276,12 @@ io.on("connection", (socket) => {
 				gs.turnCount[gs.currentTeamIndex] = 0;
 			}
 
-			// Clear guessed words for new turn
+			// Clear guessed words for new turn and store current words
 			gs.currentTurnGuessedWords = [];
 			gs.currentTurnWrongGuesses = [];
+			gs.guessedByPlayer = []; // Initialize tracking for who guessed what
+			gs.currentWords = words; // Store words in game state for mid-game joins
+			gs.timeRemaining = gs.turnTime || 60; // Store initial time
 
 			// Broadcast turn started with words to all players
 			io.to(roomCode).emit("turn-started", {
@@ -252,31 +304,78 @@ io.on("connection", (socket) => {
 				gs.currentTurnGuessedWords = [];
 			}
 
-			// Check if word was already guessed this turn (prevent duplicates)
-			if (gs.currentTurnGuessedWords.includes(word)) {
-				console.log(`Word "${word}" already guessed, ignoring duplicate`);
-				return;
+			// Initialize guessedByPlayer tracking if not exists
+			if (!gs.guessedByPlayer) {
+				gs.guessedByPlayer = [];
 			}
 
-			// Add to guessed words list
-			gs.currentTurnGuessedWords.push(word);
+			// Check if word was already guessed this turn
+			const isDuplicate = gs.currentTurnGuessedWords.includes(word);
+			const actualPoints = isDuplicate ? 0 : points;
 
-			// Update team score
-			const teamIndex = gs.currentTeamIndex;
-			gs.teams[teamIndex].score += points;
-
-			// Track player contribution
-			if (!gs.playerContributions[guesser]) {
-				gs.playerContributions[guesser] = { points: 0, words: [] };
+			if (!isDuplicate) {
+				// Add to guessed words list only if not duplicate
+				gs.currentTurnGuessedWords.push(word);
+			} else {
+				console.log(`Word "${word}" already guessed by someone else, ${guesser} gets 0 points`);
 			}
-			gs.playerContributions[guesser].points += points;
-			gs.playerContributions[guesser].words.push(word);
+
+			// Track who guessed this word (with actual points - 0 if duplicate)
+			gs.guessedByPlayer.push({ word, guesser, points: actualPoints, isDuplicate });
+
+			// Update team score (only if not duplicate)
+			if (!isDuplicate) {
+				const teamIndex = gs.currentTeamIndex;
+				gs.teams[teamIndex].score += points;
+
+				// Track player contribution
+				if (!gs.playerContributions[guesser]) {
+					gs.playerContributions[guesser] = { points: 0, guessedWords: [], describedWords: [] };
+				}
+				gs.playerContributions[guesser].points += points;
+				gs.playerContributions[guesser].guessedWords.push(word);
+
+				// Track describer's success
+				const currentDescriber = gs.teams[teamIndex].players[gs.currentDescriberIndex[teamIndex]];
+				if (currentDescriber) {
+					if (!gs.playerContributions[currentDescriber]) {
+						gs.playerContributions[currentDescriber] = { points: 0, guessedWords: [], describedWords: [] };
+					}
+					gs.playerContributions[currentDescriber].describedWords.push(word);
+				}
+
+				// Check for bonus milestones (6, 10, 14, 18, 22...)
+				const milestones = [6, 10, 14, 18, 22, 26, 30];
+				const currentCount = gs.currentTurnGuessedWords.length;
+
+				if (milestones.includes(currentCount)) {
+					// Generate bonus words on server
+					const bonusCount = 3 + Math.floor(milestones.indexOf(currentCount) / 2);
+					const bonusWords = generateBonusWords(bonusCount);
+
+					// Add to current words
+					if (!gs.currentWords) {
+						gs.currentWords = [];
+					}
+					gs.currentWords.push(...bonusWords);
+
+					// Broadcast bonus words to all players
+					io.to(roomCode).emit("bonus-words-sync", { words: bonusWords, count: bonusCount });
+				}
+			}
+
+			// Ensure wordObj has valid points
+			const syncWordObj = {
+				...wordObj,
+				points: typeof wordObj.points === 'number' ? wordObj.points : actualPoints
+			};
 
 			io.to(roomCode).emit("word-guessed-sync", {
 				word,
-				wordObj,
+				wordObj: syncWordObj,
 				guesser,
-				points,
+				points: actualPoints,
+				isDuplicate: isDuplicate,
 				gameState: gs,
 			});
 		}
@@ -322,6 +421,11 @@ io.on("connection", (socket) => {
 
 		if (room && room.gameState) {
 			const gs = room.gameState;
+
+			// Clear current words and turn state since turn has ended
+			gs.currentWords = [];
+			gs.timeRemaining = 0;
+			gs.guessedByPlayer = [];
 
 			// Just broadcast the turn ended event
 			// Don't rotate describer here - it will be done when next-turn is called
@@ -500,7 +604,7 @@ io.on("connection", (socket) => {
 								if (
 									teamIndex === currentTeamIndex &&
 									room.gameState.currentDescriberIndex[teamIndex] ===
-										teamPlayerIndex
+									teamPlayerIndex
 								) {
 									describerLeft = true;
 								}
@@ -524,7 +628,7 @@ io.on("connection", (socket) => {
 									if (
 										team.players.length > 0 &&
 										room.gameState.currentDescriberIndex[teamIndex] >=
-											team.players.length
+										team.players.length
 									) {
 										room.gameState.currentDescriberIndex[teamIndex] = 0;
 									}
@@ -588,16 +692,17 @@ io.on("connection", (socket) => {
 	// Timer sync
 	socket.on("timer-update", (data) => {
 		const { roomCode, timeRemaining } = data;
+		const room = gameRooms.get(roomCode);
+
+		// Update time remaining in game state
+		if (room && room.gameState) {
+			room.gameState.timeRemaining = timeRemaining;
+		}
+
 		socket.to(roomCode).emit("timer-sync", { timeRemaining });
 	});
 
 	// Bonus words added
-	socket.on("bonus-words-added", (data) => {
-		const { roomCode, words } = data;
-		// Broadcast bonus words to all players
-		socket.to(roomCode).emit("bonus-words-sync", { words });
-	});
-
 	// Kick player (host only)
 	socket.on("kick-player", (data) => {
 		const { roomCode, playerName } = data;
@@ -634,7 +739,7 @@ io.on("connection", (socket) => {
 								if (
 									team.players.length > 0 &&
 									room.gameState.currentDescriberIndex[teamIndex] >=
-										team.players.length
+									team.players.length
 								) {
 									room.gameState.currentDescriberIndex[teamIndex] = 0;
 								}
@@ -746,9 +851,8 @@ io.on("connection", (socket) => {
 			// Emit turn skipped
 			io.to(roomCode).emit("turn-skipped", {
 				gameState: gs,
-				message: `Turn skipped by host. It's now ${
-					gs.teams[gs.currentTeamIndex].name
-				}'s turn!`,
+				message: `Turn skipped by host. It's now ${gs.teams[gs.currentTeamIndex].name
+					}'s turn!`,
 			});
 
 			console.log(`Host skipped turn in room ${roomCode}`);
@@ -809,7 +913,7 @@ io.on("connection", (socket) => {
 								if (
 									teamIndex === currentTeamIndex &&
 									room.gameState.currentDescriberIndex[teamIndex] ===
-										teamPlayerIndex
+									teamPlayerIndex
 								) {
 									describerLeft = true;
 								}
@@ -833,7 +937,7 @@ io.on("connection", (socket) => {
 									if (
 										team.players.length > 0 &&
 										room.gameState.currentDescriberIndex[teamIndex] >=
-											team.players.length
+										team.players.length
 									) {
 										room.gameState.currentDescriberIndex[teamIndex] = 0;
 									}

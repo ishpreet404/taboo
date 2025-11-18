@@ -1,8 +1,8 @@
 'use client'
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { getDiscordUser, isDiscordActivity, setupDiscordSdk } from '@/lib/discordSdk'
+import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
-import { setupDiscordSdk, getDiscordUser, isDiscordActivity } from '@/lib/discordSdk'
 
 interface Player {
   id: string
@@ -35,7 +35,12 @@ interface GameState {
   currentWords: WordObject[]
   guessedWords: WordObject[]
   skippedWords: WordObject[]
-  playerContributions: Record<string, { points: number; words: string[] }>
+  playerContributions: Record<string, { points: number; guessedWords?: string[]; describedWords?: string[]; words?: string[] }>
+}
+
+interface Notification {
+  message: string
+  type: 'info' | 'warning' | 'success'
 }
 
 interface GameContextType {
@@ -48,6 +53,8 @@ interface GameContextType {
   players: Player[]
   gameState: GameState
   connected: boolean
+  notification: Notification | null
+  setNotification: (notification: Notification | null) => void
   setPlayerName: (name: string) => void
   createRoom: (name: string) => void
   joinRoom: (code: string, name: string) => void
@@ -68,6 +75,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [myTeam, setMyTeam] = useState<number | null>(null)
   const [currentScreen, setCurrentScreen] = useState<'room' | 'lobby' | 'game' | 'gameover'>('room')
   const [players, setPlayers] = useState<Player[]>([])
+  const [midTurnJoinData, setMidTurnJoinData] = useState<any>(null)
+  const [notification, setNotification] = useState<Notification | null>(null)
+  const wasKicked = useRef(false)
   const [gameState, setGameState] = useState<GameState>({
     teams: [
       { name: 'Team 1', players: [], score: 0 },
@@ -109,14 +119,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-    
+
     initDiscord()
   }, [])
 
   useEffect(() => {
     const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000'
     console.log('Connecting to server:', serverUrl)
-    
+
     const newSocket = io(serverUrl, {
       transports: ['websocket', 'polling'],
       reconnection: true,
@@ -137,15 +147,27 @@ export function GameProvider({ children }: { children: ReactNode }) {
     })
 
     newSocket.on('room-created', (data) => {
+      wasKicked.current = false
       setRoomCode(data.roomCode)
       setPlayers(data.room.players)
       setIsHost(true)
+      // Find this player's team assignment
+      const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
+      if (currentPlayer) {
+        setMyTeam(currentPlayer.team)
+      }
       setCurrentScreen('lobby')
     })
 
     newSocket.on('room-joined', (data) => {
+      wasKicked.current = false
       setRoomCode(data.roomCode)
       setPlayers(data.room.players)
+      // Find this player's team assignment
+      const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
+      if (currentPlayer) {
+        setMyTeam(currentPlayer.team)
+      }
       setCurrentScreen('lobby')
     })
 
@@ -154,7 +176,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setPlayers(data.room.players)
       setGameState(data.gameState)
       setCurrentScreen('lobby') // Show lobby so they can pick a team
-      alert('Game is in progress! Please join a team to participate.')
+      setNotification({ message: 'Game is in progress! Please join a team to participate.', type: 'info' })
+      setTimeout(() => setNotification(null), 4000)
     })
 
     newSocket.on('room-rejoined', (data) => {
@@ -167,7 +190,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setMyTeam(player.team)
       }
       setCurrentScreen('game')
-      alert('Reconnected to game!')
+      setNotification({ message: 'Reconnected to game!', type: 'success' })
+      setTimeout(() => setNotification(null), 3000)
     })
 
     newSocket.on('player-joined', (data) => {
@@ -203,12 +227,18 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setIsHost(isNewHost)
       console.log(`New host: ${data.newHost}`)
       if (isNewHost) {
-        alert(`You are now the host of the room!`)
+        setNotification({ message: 'You are now the host of the room!', type: 'info' })
+        setTimeout(() => setNotification(null), 3000)
       }
     })
 
     newSocket.on('team-updated', (data) => {
       setPlayers(data.room.players)
+      // Update myTeam based on current player's team assignment from server
+      const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
+      if (currentPlayer) {
+        setMyTeam(currentPlayer.team)
+      }
     })
 
     newSocket.on('team-updated-midgame', (data) => {
@@ -218,8 +248,25 @@ export function GameProvider({ children }: { children: ReactNode }) {
       const player = data.room.players.find((p: any) => p.id === newSocket.id)
       if (player && player.name === data.joinedPlayer) {
         setMyTeam(player.team)
-        setCurrentScreen('game')
-        alert(`You joined ${data.joinedTeam}! The game is in progress.`)
+
+        // Store mid-turn data if there's an active turn
+        if (data.turnInProgress) {
+          console.log(`Joined ${data.joinedTeam} mid-turn! Storing turn data...`)
+          setMidTurnJoinData(data)
+
+          // Navigate to game screen
+          setCurrentScreen('game')
+
+          // After a small delay, dispatch a custom event for GameScreen to catch
+          setTimeout(() => {
+            console.log('📢 Dispatching midturn-sync event for GameScreen')
+            const event = new CustomEvent('midturn-sync', { detail: data })
+            window.dispatchEvent(event)
+          }, 150)
+        } else {
+          console.log(`Joined ${data.joinedTeam}. Game in progress.`)
+          setCurrentScreen('game')
+        }
       } else {
         // Notify other players
         console.log(`${data.joinedPlayer} joined ${data.joinedTeam}`)
@@ -258,17 +305,22 @@ export function GameProvider({ children }: { children: ReactNode }) {
     newSocket.on('turn-skipped', (data) => {
       setGameState(data.gameState)
       if (data.message) {
-        alert(data.message)
+        setNotification({ message: data.message, type: 'info' })
+        setTimeout(() => setNotification(null), 3000)
       }
     })
 
     newSocket.on('game-over', (data) => {
-      setGameState(data.gameState)
-      setCurrentScreen('gameover')
+      // Only show game over screen if player wasn't kicked
+      if (!wasKicked.current) {
+        setGameState(data.gameState)
+        setCurrentScreen('gameover')
+      }
     })
 
     newSocket.on('host-left', (data) => {
-      alert(data.message)
+      setNotification({ message: data.message, type: 'warning' })
+      setTimeout(() => setNotification(null), 3000)
       setCurrentScreen('room')
       setRoomCode(null)
       setPlayers([])
@@ -284,7 +336,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
     })
 
     newSocket.on('you-were-kicked', (data) => {
-      alert(data.message)
+      wasKicked.current = true
+      setNotification({ message: data.message, type: 'warning' })
+      setTimeout(() => setNotification(null), 4000)
       setCurrentScreen('room')
       setRoomCode(null)
       setPlayers([])
@@ -294,14 +348,15 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     newSocket.on('describer-changed', (data) => {
       setGameState(data.gameState)
-      // Show notification to everyone
       if (data.message) {
-        alert(data.message)
+        setNotification({ message: data.message, type: 'info' })
+        setTimeout(() => setNotification(null), 3000)
       }
     })
 
     newSocket.on('error', (data) => {
-      alert(data.message)
+      console.error('Socket error:', data.message)
+      // Error handling can be improved with custom UI in the future
     })
 
     setSocket(newSocket)
@@ -376,7 +431,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const leaveGame = () => {
     socket?.emit('leave-game', { roomCode })
-    setCurrentScreen('lobby')
+    setMyTeam(null)
+    setCurrentScreen('room')
   }
 
   return (
@@ -391,6 +447,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         players,
         gameState,
         connected,
+        notification,
+        setNotification,
         setPlayerName,
         createRoom,
         joinRoom,

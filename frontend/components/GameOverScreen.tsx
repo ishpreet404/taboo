@@ -1,12 +1,12 @@
 'use client'
 
-import { useGame } from './GameContext'
 import { motion } from 'framer-motion'
-import { Trophy, Star, Medal, Home } from 'lucide-react'
+import { Home, Medal, Star, Trophy } from 'lucide-react'
+import { useGame } from './GameContext'
 
 export default function GameOverScreen() {
   const { gameState, setCurrentScreen } = useGame()
-  
+
   const team1 = gameState.teams[0]
   const team2 = gameState.teams[1]
   const winner = team1.score > team2.score ? team1 : team2.score > team1.score ? team2 : null
@@ -62,9 +62,8 @@ export default function GameOverScreen() {
           initial={{ x: -50, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           transition={{ delay: 0.2 }}
-          className={`glass-strong rounded-2xl p-8 border-2 ${
-            winner === team1 ? 'border-yellow-500 bg-yellow-500/10' : 'border-blue-500/30'
-          }`}
+          className={`glass-strong rounded-2xl p-8 border-2 ${winner === team1 ? 'border-yellow-500 bg-yellow-500/10' : 'border-blue-500/30'
+            }`}
         >
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold text-blue-400">{team1.name}</h2>
@@ -88,9 +87,8 @@ export default function GameOverScreen() {
           initial={{ x: 50, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           transition={{ delay: 0.2 }}
-          className={`glass-strong rounded-2xl p-8 border-2 ${
-            winner === team2 ? 'border-yellow-500 bg-yellow-500/10' : 'border-red-500/30'
-          }`}
+          className={`glass-strong rounded-2xl p-8 border-2 ${winner === team2 ? 'border-yellow-500 bg-yellow-500/10' : 'border-red-500/30'
+            }`}
         >
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold text-red-400">{team2.name}</h2>
@@ -143,7 +141,9 @@ export default function GameOverScreen() {
                 </div>
                 <div>
                   <div className="font-semibold">{player.name}</div>
-                  <div className="text-sm text-gray-400">{player.words.length} words guessed</div>
+                  <div className="text-sm text-gray-400">
+                    {(player.guessedWords?.length || player.words?.length || 0)} guessed | {player.describedWords?.length || 0} described
+                  </div>
                 </div>
               </div>
               <div className="text-2xl font-bold text-yellow-400">{player.points}</div>
