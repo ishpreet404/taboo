@@ -54,6 +54,7 @@ interface GameContextType {
   gameState: GameState
   connected: boolean
   notification: Notification | null
+  teamSwitchingLocked: boolean
   setNotification: (notification: Notification | null) => void
   setPlayerName: (name: string) => void
   createRoom: (name: string) => void
@@ -75,6 +76,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [myTeam, setMyTeam] = useState<number | null>(null)
   const [currentScreen, setCurrentScreen] = useState<'room' | 'lobby' | 'game' | 'gameover'>('room')
   const [players, setPlayers] = useState<Player[]>([])
+  const [teamSwitchingLocked, setTeamSwitchingLocked] = useState(false)
   const [midTurnJoinData, setMidTurnJoinData] = useState<any>(null)
   const [notification, setNotification] = useState<Notification | null>(null)
   const wasKicked = useRef(false)
@@ -346,6 +348,18 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setMyTeam(null)
     })
 
+    newSocket.on('team-switching-locked', (data) => {
+      setTeamSwitchingLocked(data.locked)
+      const message = data.locked ? 'Team switching has been locked by the host' : 'Team switching has been unlocked'
+      setNotification({ message, type: 'info' })
+      setTimeout(() => setNotification(null), 3000)
+    })
+
+    newSocket.on('error', (data) => {
+      setNotification({ message: data.message, type: 'warning' })
+      setTimeout(() => setNotification(null), 3000)
+    })
+
     newSocket.on('describer-changed', (data) => {
       setGameState(data.gameState)
       if (data.message) {
@@ -448,6 +462,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         gameState,
         connected,
         notification,
+        teamSwitchingLocked,
         setNotification,
         setPlayerName,
         createRoom,

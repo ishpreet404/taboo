@@ -80,6 +80,7 @@ io.on("connection", (socket) => {
 			],
 			gameState: null,
 			started: false,
+			teamSwitchingLocked: false,
 		};
 
 		gameRooms.set(roomCode, room);
@@ -166,6 +167,12 @@ io.on("connection", (socket) => {
 		const room = gameRooms.get(roomCode);
 
 		if (room) {
+			// Check if team switching is locked
+			if (room.teamSwitchingLocked) {
+				socket.emit("error", { message: "Team switching is currently locked by the host" });
+				return;
+			}
+
 			const player = room.players.find((p) => p.id === socket.id);
 			if (player) {
 				player.team = teamIndex;
@@ -856,6 +863,71 @@ io.on("connection", (socket) => {
 			});
 
 			console.log(`Host skipped turn in room ${roomCode}`);
+		}
+	});
+
+	// Admin: Toggle team switching lock
+	socket.on("admin-toggle-team-switching", (data) => {
+		const { roomCode } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id) {
+			room.teamSwitchingLocked = !room.teamSwitchingLocked;
+			io.to(roomCode).emit("team-switching-locked", {
+				locked: room.teamSwitchingLocked,
+			});
+			console.log(`Team switching ${room.teamSwitchingLocked ? 'locked' : 'unlocked'} in room ${roomCode}`);
+		}
+	});
+
+	// Admin: Randomize teams
+	socket.on("admin-randomize-teams", (data) => {
+		const { roomCode } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id) {
+			// Get all players
+			const allPlayers = [...room.players];
+
+			// Shuffle the players array
+			for (let i = allPlayers.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[allPlayers[i], allPlayers[j]] = [allPlayers[j], allPlayers[i]];
+			}
+
+			// Split players into two teams
+			const midpoint = Math.ceil(allPlayers.length / 2);
+
+			allPlayers.forEach((player, index) => {
+				player.team = index < midpoint ? 0 : 1;
+			});
+
+			// If game is in progress, also update the game state
+			if (room.started && room.gameState) {
+				// Clear existing teams
+				room.gameState.teams.forEach(team => {
+					team.players = [];
+				});
+
+				// Add players to game state teams
+				allPlayers.forEach(player => {
+					if (player.team !== null) {
+						room.gameState.teams[player.team].players.push(player.name);
+					}
+				});
+
+				// Reset describer indices
+				room.gameState.currentDescriberIndex = [0, 0];
+
+				io.to(roomCode).emit("team-updated-midgame", {
+					room,
+					gameState: room.gameState,
+				});
+			} else {
+				io.to(roomCode).emit("team-updated", { room });
+			}
+
+			console.log(`Teams randomized in room ${roomCode}`);
 		}
 	});
 

@@ -1,12 +1,12 @@
 'use client'
 
 import { wordDatabase } from '@/lib/wordDatabase'
-import { Clock, Copy, LogOut, Settings, Shield, SkipForward, Trophy, UserCheck, Users, UserX, Zap } from 'lucide-react'
+import { Clock, Copy, Lock, LogOut, Settings, Shield, Shuffle, SkipForward, Trophy, Unlock, UserCheck, Users, UserX, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame, isHost, setCurrentScreen, myTeam, joinTeam } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
@@ -638,6 +638,18 @@ export default function GameScreen() {
     socket?.emit('admin-resume-timer', { roomCode })
   }
 
+  const handleToggleTeamSwitching = () => {
+    if (!isHost) return
+    socket?.emit('admin-toggle-team-switching', { roomCode })
+    setShowAdminPanel(false)
+  }
+
+  const handleRandomizeTeams = () => {
+    if (!isHost) return
+    socket?.emit('admin-randomize-teams', { roomCode })
+    setShowAdminPanel(false)
+  }
+
   return (
     <div className="space-y-3 md:space-y-4 lg:space-y-6 px-2 sm:px-0">
       {/* Top Header Bar - Fixed Position */}
@@ -657,15 +669,21 @@ export default function GameScreen() {
               </button>
             </div>
 
-            {/* Change Team Button - Disabled during active turn */}
+            {/* Change Team Button - Disabled during active turn or when teams are locked */}
             <button
               onClick={handleChangeTeam}
-              disabled={turnActive}
-              className={`px-3 sm:px-4 py-2.5 glass-strong rounded-xl transition-colors flex items-center gap-2 text-sm font-medium border shadow-lg h-10 sm:h-11 ${turnActive
-                ? 'border-gray-500/30 text-gray-500 cursor-not-allowed opacity-50'
-                : 'border-green-500/30 text-green-400 hover:bg-green-500/20 hover:border-green-500/50'
+              disabled={turnActive || teamSwitchingLocked}
+              className={`px-3 sm:px-4 py-2.5 glass-strong rounded-xl transition-colors flex items-center gap-2 text-sm font-medium border shadow-lg h-10 sm:h-11 ${turnActive || teamSwitchingLocked
+                  ? 'border-gray-500/30 text-gray-500 cursor-not-allowed opacity-50'
+                  : 'border-green-500/30 text-green-400 hover:bg-green-500/20 hover:border-green-500/50'
                 }`}
-              title={turnActive ? 'Cannot change teams during an active turn' : 'Switch to opposite team'}
+              title={
+                turnActive
+                  ? 'Cannot change teams during an active turn'
+                  : teamSwitchingLocked
+                    ? 'Team switching is locked by the host'
+                    : 'Switch to opposite team'
+              }
             >
               <UserCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               <span className="hidden sm:inline">Change Team</span>
@@ -827,6 +845,42 @@ export default function GameScreen() {
                 >
                   <Trophy className="w-5 h-5" />
                   End Game
+                </button>
+              </div>
+            </div>
+
+            {/* Team Management Section */}
+            <div className="mb-6">
+              <h4 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                <Users className="w-5 h-5 text-purple-400" />
+                Team Management
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={handleToggleTeamSwitching}
+                  className={`px-4 py-3 glass-strong rounded-lg transition-colors flex items-center justify-center gap-2 border ${teamSwitchingLocked
+                    ? 'hover:bg-green-500/20 text-green-400 border-green-500/30'
+                    : 'hover:bg-orange-500/20 text-orange-400 border-orange-500/30'
+                    }`}
+                >
+                  {teamSwitchingLocked ? (
+                    <>
+                      <Unlock className="w-5 h-5" />
+                      Unlock Teams
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-5 h-5" />
+                      Lock Teams
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={handleRandomizeTeams}
+                  className="px-4 py-3 glass-strong rounded-lg hover:bg-purple-500/20 transition-colors flex items-center justify-center gap-2 text-purple-400 border border-purple-500/30"
+                >
+                  <Shuffle className="w-5 h-5" />
+                  Randomize Teams
                 </button>
               </div>
             </div>

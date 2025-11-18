@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function LobbyScreen() {
-  const { roomCode, players, isHost, myTeam, joinTeam, startGame, playerName, leaveGame } = useGame()
+  const { roomCode, players, isHost, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked } = useGame()
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
 
   const team1 = players.filter(p => p.team === 0)
@@ -86,13 +86,15 @@ export default function LobbyScreen() {
 
           <button
             onClick={() => joinTeam(0)}
-            disabled={myTeam === 0}
+            disabled={myTeam === 0 || teamSwitchingLocked}
             className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 0
-              ? 'bg-blue-500/50 cursor-not-allowed'
-              : 'bg-blue-500 hover:bg-blue-600 hover:scale-105'
+                ? 'bg-blue-500/50 cursor-not-allowed'
+                : teamSwitchingLocked
+                  ? 'bg-gray-500/50 cursor-not-allowed'
+                  : 'bg-blue-500 hover:bg-blue-600 hover:scale-105'
               }`}
           >
-            {myTeam === 0 ? 'Current Team' : 'Join Team 1'}
+            {myTeam === 0 ? 'Current Team' : teamSwitchingLocked ? 'Teams Locked' : 'Join Team 1'}
           </button>
         </motion.div>
 
@@ -126,13 +128,15 @@ export default function LobbyScreen() {
 
           <button
             onClick={() => joinTeam(1)}
-            disabled={myTeam === 1}
+            disabled={myTeam === 1 || teamSwitchingLocked}
             className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 1
-              ? 'bg-red-500/50 cursor-not-allowed'
-              : 'bg-red-500 hover:bg-red-600 hover:scale-105'
+                ? 'bg-red-500/50 cursor-not-allowed'
+                : teamSwitchingLocked
+                  ? 'bg-gray-500/50 cursor-not-allowed'
+                  : 'bg-red-500 hover:bg-red-600 hover:scale-105'
               }`}
           >
-            {myTeam === 1 ? 'Current Team' : 'Join Team 2'}
+            {myTeam === 1 ? 'Current Team' : teamSwitchingLocked ? 'Teams Locked' : 'Join Team 2'}
           </button>
         </motion.div>
       </div>
