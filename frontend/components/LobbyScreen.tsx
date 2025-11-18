@@ -1,11 +1,13 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { ArrowLeft, Copy, Crown, Play } from 'lucide-react'
+import { Copy, Crown, LogOut, Play } from 'lucide-react'
+import { useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function LobbyScreen() {
-  const { roomCode, players, isHost, myTeam, joinTeam, startGame, playerName, setCurrentScreen } = useGame()
+  const { roomCode, players, isHost, myTeam, joinTeam, startGame, playerName, leaveGame } = useGame()
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
 
   const team1 = players.filter(p => p.team === 0)
   const team2 = players.filter(p => p.team === 1)
@@ -19,24 +21,20 @@ export default function LobbyScreen() {
     }
   }
 
+  const handleLeaveGame = () => {
+    setShowLeaveConfirm(false)
+    leaveGame()
+  }
+
   return (
     <div className="py-6 md:py-8 relative px-4">
-      {/* Back Button */}
-      <button
-        onClick={() => setCurrentScreen('room')}
-        className="absolute top-0 left-4 px-3 md:px-4 py-2 glass-strong rounded-xl hover:bg-white/10 transition-colors flex items-center gap-2 text-sm md:text-base"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        <span className="hidden sm:inline">Back</span>
-      </button>
-
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         className="text-center mb-6 md:mb-8"
       >
         <h1 className="text-3xl md:text-4xl font-bold mb-4">Game Lobby</h1>
-        <div className="flex items-center justify-center gap-3">
+        <div className="flex items-center justify-center gap-3 relative">
           <div className="glass rounded-xl px-4 md:px-6 py-2 md:py-3 flex items-center gap-2 md:gap-3">
             <span className="text-gray-400 text-sm md:text-base">Room Code:</span>
             <span className="text-xl md:text-2xl font-mono font-bold tracking-wider">{roomCode}</span>
@@ -47,6 +45,13 @@ export default function LobbyScreen() {
               <Copy className="w-4 h-4 md:w-5 md:h-5" />
             </button>
           </div>
+          {/* Leave Button */}
+          <button
+            onClick={() => setShowLeaveConfirm(true)}
+            className="absolute right-0 p-2 md:p-2.5 glass-strong rounded-lg hover:bg-red-500/20 transition-colors text-red-400 border border-red-500/30 hover:border-red-500/50"
+          >
+            <LogOut className="w-4 h-4 md:w-5 md:h-5" />
+          </button>
         </div>
       </motion.div>
 
@@ -83,8 +88,8 @@ export default function LobbyScreen() {
             onClick={() => joinTeam(0)}
             disabled={myTeam === 0}
             className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 0
-                ? 'bg-blue-500/50 cursor-not-allowed'
-                : 'bg-blue-500 hover:bg-blue-600 hover:scale-105'
+              ? 'bg-blue-500/50 cursor-not-allowed'
+              : 'bg-blue-500 hover:bg-blue-600 hover:scale-105'
               }`}
           >
             {myTeam === 0 ? 'Current Team' : 'Join Team 1'}
@@ -123,8 +128,8 @@ export default function LobbyScreen() {
             onClick={() => joinTeam(1)}
             disabled={myTeam === 1}
             className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 1
-                ? 'bg-red-500/50 cursor-not-allowed'
-                : 'bg-red-500 hover:bg-red-600 hover:scale-105'
+              ? 'bg-red-500/50 cursor-not-allowed'
+              : 'bg-red-500 hover:bg-red-600 hover:scale-105'
               }`}
           >
             {myTeam === 1 ? 'Current Team' : 'Join Team 2'}
@@ -178,6 +183,38 @@ export default function LobbyScreen() {
       {!isHost && (
         <div className="text-center text-gray-400">
           Waiting for host to start the game...
+        </div>
+      )}
+
+      {/* Leave Confirmation Modal */}
+      {showLeaveConfirm && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setShowLeaveConfirm(false)}
+        >
+          <div
+            className="glass-strong rounded-2xl p-6 md:p-8 max-w-md w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-xl md:text-2xl font-bold mb-4">Leave Lobby?</h3>
+            <p className="text-gray-400 mb-6 text-sm md:text-base">
+              Are you sure you want to leave? You'll need to rejoin with a new name.
+            </p>
+            <div className="flex gap-4">
+              <button
+                onClick={() => setShowLeaveConfirm(false)}
+                className="flex-1 px-4 md:px-6 py-2.5 md:py-3 glass rounded-xl hover:bg-white/10 transition-colors text-sm md:text-base"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleLeaveGame}
+                className="flex-1 px-4 md:px-6 py-2.5 md:py-3 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 rounded-xl transition-colors font-semibold text-sm md:text-base"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
