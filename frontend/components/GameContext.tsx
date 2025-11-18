@@ -348,6 +348,16 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setMyTeam(null)
     })
 
+    newSocket.on('you-left-game', (data) => {
+      setNotification({ message: data.message, type: 'info' })
+      setTimeout(() => setNotification(null), 4000)
+      setCurrentScreen('room')
+      setRoomCode(null)
+      setPlayers([])
+      setIsHost(false)
+      setMyTeam(null)
+    })
+
     newSocket.on('team-switching-locked', (data) => {
       setTeamSwitchingLocked(data.locked)
       const message = data.locked ? 'Team switching has been locked by the host' : 'Team switching has been unlocked'

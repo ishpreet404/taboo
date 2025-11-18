@@ -581,6 +581,14 @@ io.on("connection", (socket) => {
 				// Remove player from room
 				room.players.splice(playerIndex, 1);
 
+				// Make the leaving player leave the socket room to disconnect them properly
+				socket.leave(roomCode);
+
+				// Notify the leaving player that they've left (similar to kick)
+				socket.emit("you-left-game", {
+					message: "You have left the game.",
+				});
+
 				// Transfer host if needed
 				if (wasHost && room.players.length > 0) {
 					room.host = room.players[0].id;
