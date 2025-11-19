@@ -1,17 +1,18 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useGame } from './GameContext'
-import { Clock, Trophy, Zap, LogOut, Users, Settings, UserX, Shield, SkipForward } from 'lucide-react'
 import { wordDatabase } from '@/lib/wordDatabase'
+import { Clock, Copy, Lock, LogOut, Settings, Shield, Shuffle, SkipForward, Trophy, Unlock, UserCheck, Users, UserX, Zap } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useGame } from './GameContext'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame, isHost } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
-  const [guessedByPlayer, setGuessedByPlayer] = useState<{word: string, guesser: string, points: number}[]>([])
-  const [wrongGuesses, setWrongGuesses] = useState<{word: string, guesser: string}[]>([])
+  const [guessedByPlayer, setGuessedByPlayer] = useState<{ word: string, guesser: string, points: number, isDuplicate?: boolean }[]>([])
+  const [wrongGuesses, setWrongGuesses] = useState<{ word: string, guesser: string }[]>([])
+  const [playerWordAttempts, setPlayerWordAttempts] = useState<Map<string, Set<string>>>(new Map()) // Map of playerName -> Set of words they've guessed
   const [previousRoundWords, setPreviousRoundWords] = useState<any[]>([])
   const [guess, setGuess] = useState('')
   const [timeRemaining, setTimeRemaining] = useState(60)
@@ -23,12 +24,14 @@ export default function GameScreen() {
   const [usedWordIndices, setUsedWordIndices] = useState<Set<number>>(new Set())
   const [bonusMilestones, setBonusMilestones] = useState<number[]>([6, 10, 14, 18, 22]) // Next bonus at 6, then 10, 14, 18, 22...
   const [showHostMenu, setShowHostMenu] = useState<{ teamIndex: number; playerIndex: number } | null>(null)
+  const [notification, setNotification] = useState<{ message: string; type: 'info' | 'warning' | 'success' } | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null)
 
   const currentTeam = gameState.teams[gameState.currentTeamIndex]
   const currentDescriberIndex = gameState.currentDescriberIndex?.[gameState.currentTeamIndex] ?? 0
   const currentDescriber = currentTeam?.players?.[currentDescriberIndex]
   const isMyTurn = currentDescriber === playerName
-  
+
   // Check if player is on the current team and not the describer
   const isOnCurrentTeam = playerName ? currentTeam?.players?.includes(playerName) : false
   const isGuesser = isOnCurrentTeam && !isMyTurn
@@ -38,22 +41,24 @@ export default function GameScreen() {
     if (!socket) return
 
     const handleWordGuessed = (data: any) => {
-      // Track who guessed the word and update guessedWords for all players
-      if (data.word && data.guesser && data.points && data.wordObj) {
-        setGuessedByPlayer(prev => [...prev, {
-          word: data.word,
-          guesser: data.guesser,
-          points: data.points
-        }])
-        
-        // Update guessedWords for all players with the full wordObj
-        setGuessedWords(prev => {
-          // Avoid duplicates
-          if (prev.some(w => w.word === data.word)) {
-            return prev
-          }
-          return [...prev, data.wordObj]
+      // Sync from server gameState to ensure all players have same data
+      if (data.gameState && data.gameState.guessedByPlayer) {
+        setGuessedByPlayer(data.gameState.guessedByPlayer)
+      }
+
+      // Sync guessedWords from server's currentTurnGuessedWords to prevent duplicate counting
+      if (data.gameState && data.gameState.currentTurnGuessedWords && data.gameState.currentWords) {
+        // Build guessedWords array from server's non-duplicate list
+        const serverGuessedWords = data.gameState.currentTurnGuessedWords.map((word: string) => {
+          const wordObj = data.gameState.currentWords.find((w: any) => w.word === word)
+          return wordObj || { word, points: 0, difficulty: 'medium' }
         })
+        setGuessedWords(serverGuessedWords)
+
+        // Sync currentWords from server to stay consistent
+        if (data.gameState.currentWords) {
+          setCurrentWords(data.gameState.currentWords)
+        }
       }
     }
 
@@ -65,6 +70,7 @@ export default function GameScreen() {
       setGuessedWords([])
       setGuessedByPlayer([])
       setWrongGuesses([])
+      setPlayerWordAttempts(new Map())
       // Set the words for all players (including guessers)
       if (data.words) {
         setCurrentWords(data.words)
@@ -92,6 +98,7 @@ export default function GameScreen() {
       setGuessedWords([])
       setGuessedByPlayer([])
       setWrongGuesses([])
+      setPlayerWordAttempts(new Map())
       setPreviousRoundWords([]) // Clear previous round words when starting new turn
       setTimeRemaining(60)
     }
@@ -103,7 +110,8 @@ export default function GameScreen() {
         const newDescriber = data.gameState.teams[data.gameState.currentTeamIndex].players[
           data.gameState.currentDescriberIndex[data.gameState.currentTeamIndex]
         ]
-        alert(`${data.message}\nNext describer: ${newDescriber}`)
+        setNotification({ message: `${data.message}\nNext describer: ${newDescriber}`, type: 'info' })
+        setTimeout(() => setNotification(null), 4000)
       }
       // Reset to turn-start phase for the new describer
       setGamePhase('turn-start')
@@ -125,7 +133,8 @@ export default function GameScreen() {
     }
 
     const handleDescriberLeft = (data: any) => {
-      alert(data.message)
+      setNotification({ message: data.message, type: 'warning' })
+      setTimeout(() => setNotification(null), 4000)
       // Reset to turn-start phase for new describer
       setGamePhase('turn-start')
       setGuessedWords([])
@@ -136,21 +145,22 @@ export default function GameScreen() {
     }
 
     const handleHostLeft = () => {
-      alert('Host has left. Room is closing.')
-      leaveGame()
+      setNotification({ message: 'Host has left. Room is closing.', type: 'warning' })
+      setTimeout(() => leaveGame(), 2000)
     }
 
     const handleBonusWords = (data: any) => {
       if (data.words) {
         setCurrentWords(prev => [...prev, ...data.words])
-        setBonusWordCount(data.words.length) // Set the count for the notification
+        setBonusWordCount(data.count || data.words.length)
         setShowBonusNotification(true)
         setTimeout(() => setShowBonusNotification(false), 3000)
       }
     }
 
     const handleTeamEmptySkip = (data: any) => {
-      alert(data.message)
+      setNotification({ message: data.message, type: 'info' })
+      setTimeout(() => setNotification(null), 4000)
       // Game continues with the other team
       setGamePhase('turn-start')
       setGuessedWords([])
@@ -159,6 +169,46 @@ export default function GameScreen() {
       setTimeRemaining(60)
       setTurnActive(false)
     }
+
+    const handleTeamUpdatedMidgame = (data: any) => {
+      console.log('Team updated midgame received:', data)
+      console.log('My playerName:', playerName)
+      console.log('Joined player:', data.joinedPlayer)
+      console.log('Names match?', data.joinedPlayer === playerName)
+
+      // Only sync state if this is the player who just joined
+      if (data.joinedPlayer === playerName) {
+        console.log('✅ I am the player who joined! Syncing my state.')
+
+        // If a turn is in progress and there are words, sync the new player
+        if (data.turnInProgress && data.currentWords && data.currentWords.length > 0) {
+          console.log('✅ Syncing turn state - words:', data.currentWords.length, 'time:', data.timeRemaining)
+          console.log('Setting gamePhase to playing...')
+          setCurrentWords(data.currentWords)
+          setGamePhase('playing')
+          setTurnActive(true)
+          setTimeRemaining(data.timeRemaining || 60)
+          setGuessedWords(data.currentTurnGuessedWords || [])
+          setWrongGuesses(data.currentTurnWrongGuesses || [])
+          setGuessedByPlayer(data.guessedByPlayer || [])
+          console.log('✅ State synced successfully! Game phase should be playing now.')
+        } else {
+          console.log('⚠️ No active turn, staying at turn-start phase')
+          console.log('turnInProgress:', data.turnInProgress)
+          console.log('currentWords length:', data.currentWords?.length)
+        }
+      } else {
+        console.log('❌ Not me, just updating for other player:', data.joinedPlayer)
+      }
+    }
+
+    // Listen for window custom event for mid-turn sync
+    const handleMidturnSync = (event: any) => {
+      console.log('🔄 Received midturn-sync event!', event.detail)
+      handleTeamUpdatedMidgame(event.detail)
+    }
+
+    window.addEventListener('midturn-sync', handleMidturnSync)
 
     socket.on('word-guessed-sync', handleWordGuessed)
     socket.on('turn-started', handleTurnStarted)
@@ -171,8 +221,10 @@ export default function GameScreen() {
     socket.on('wrong-guess-sync', handleWrongGuess)
     socket.on('describer-left', handleDescriberLeft)
     socket.on('team-empty-skip', handleTeamEmptySkip)
+    socket.on('team-updated-midgame', handleTeamUpdatedMidgame)
 
     return () => {
+      window.removeEventListener('midturn-sync', handleMidturnSync)
       socket.off('word-guessed-sync', handleWordGuessed)
       socket.off('turn-started', handleTurnStarted)
       socket.off('turn-ended', handleTurnEnded)
@@ -184,8 +236,9 @@ export default function GameScreen() {
       socket.off('wrong-guess-sync', handleWrongGuess)
       socket.off('describer-left', handleDescriberLeft)
       socket.off('team-empty-skip', handleTeamEmptySkip)
+      socket.off('team-updated-midgame', handleTeamUpdatedMidgame)
     }
-  }, [socket])
+  }, [socket, playerName])
 
   // Close host menu when clicking outside
   useEffect(() => {
@@ -207,7 +260,7 @@ export default function GameScreen() {
         setTimeRemaining(newTime)
         // Broadcast timer to all players
         socket?.emit('timer-update', { roomCode, timeRemaining: newTime })
-        
+
         // Check if time is up after update
         if (newTime === 0) {
           handleEndTurn()
@@ -232,7 +285,7 @@ export default function GameScreen() {
     let availableIndices = wordDatabase
       .map((_, index) => index)
       .filter(index => !usedWordIndices.has(index))
-    
+
     // If we've used more than 80% of words, reset the used words set
     if (availableIndices.length < wordDatabase.length * 0.2) {
       const newSet = new Set<number>()
@@ -240,29 +293,29 @@ export default function GameScreen() {
       // Recalculate available indices with empty set
       availableIndices = wordDatabase.map((_, index) => index)
     }
-    
+
     let selectedWords: any[] = []
-    
+
     // If we need to ensure hard words (for initial round setup)
     if (ensureHardWords) {
       // Get hard words - only 2 per turn
-      const hardWordIndices = availableIndices.filter(index => 
+      const hardWordIndices = availableIndices.filter(index =>
         wordDatabase[index].difficulty === 'hard'
       )
       const shuffledHardIndices = shuffleArray(hardWordIndices)
       const selectedHardIndices = shuffledHardIndices.slice(0, Math.min(2, hardWordIndices.length))
-      
+
       // Get remaining words
-      const remainingIndices = availableIndices.filter(index => 
+      const remainingIndices = availableIndices.filter(index =>
         !selectedHardIndices.includes(index)
       )
       const shuffledRemainingIndices = shuffleArray(remainingIndices)
       const selectedRemainingIndices = shuffledRemainingIndices.slice(0, count - selectedHardIndices.length)
-      
+
       // Combine
       const allSelectedIndices = [...selectedHardIndices, ...selectedRemainingIndices]
       selectedWords = allSelectedIndices.map(index => wordDatabase[index])
-      
+
       // Mark as used
       setUsedWordIndices(prev => {
         const newSet = new Set(prev)
@@ -274,7 +327,7 @@ export default function GameScreen() {
       const shuffledIndices = shuffleArray(availableIndices)
       const selectedIndices = shuffledIndices.slice(0, Math.min(count, shuffledIndices.length))
       selectedWords = selectedIndices.map(index => wordDatabase[index])
-      
+
       // Mark as used
       setUsedWordIndices(prev => {
         const newSet = new Set(prev)
@@ -282,7 +335,7 @@ export default function GameScreen() {
         return newSet
       })
     }
-    
+
     // Sort by difficulty for better gameplay (easy to hard)
     return selectedWords.sort((a, b) => {
       const difficultyOrder: { [key: string]: number } = { easy: 0, medium: 1, hard: 2 }
@@ -299,7 +352,7 @@ export default function GameScreen() {
     setTimeRemaining(60)
     setTurnActive(true)
     setGamePhase('playing')
-    
+
     // Send words to server so all players get them
     socket?.emit('start-turn', { roomCode, words })
   }
@@ -347,53 +400,56 @@ export default function GameScreen() {
   const submitGuess = () => {
     // Only allow guesses from team members who are guessing
     if (!isGuesser) return
-    
+
     const input = guess.trim().toUpperCase()
     if (input.length === 0) return
 
     let foundMatch = false
     let partialMatch: { wordObj: any; similarity: number } | null = null
+    let alreadyGuessed = false
+    let isSecondDuplicate = false
 
     for (const wordObj of currentWords) {
-      if (guessedWords.includes(wordObj)) continue
-
-      // Check for exact match
+      // Check for exact match first (before checking if already guessed)
       if (input === wordObj.word) {
+        // Check if already guessed
+        if (guessedWords.some(w => w.word === wordObj.word)) {
+          // Check if this specific player has already guessed this word
+          const playerAttempts = playerWordAttempts.get(playerName || '') || new Set()
+          if (!playerAttempts.has(wordObj.word)) {
+            // First time THIS player guesses this duplicate: allow it (shows green)
+            alreadyGuessed = true
+            const newAttempts = new Set(playerAttempts).add(wordObj.word)
+            setPlayerWordAttempts(prev => new Map(prev).set(playerName || '', newAttempts))
+          } else {
+            // This player already guessed this word once: treat as wrong guess
+            isSecondDuplicate = true
+          }
+          break
+        }
+
         foundMatch = true
-        const newGuessed = [...guessedWords, wordObj]
-        setGuessedWords(newGuessed)
         setGuess('')
-        
+
+        // Track this player's guess for future duplicate detection
+        const playerAttempts = playerWordAttempts.get(playerName || '') || new Set()
+        const newAttempts = new Set(playerAttempts).add(wordObj.word)
+        setPlayerWordAttempts(prev => new Map(prev).set(playerName || '', newAttempts))
+
         // Emit to server with full wordObj and full points
-        socket?.emit('word-guessed', { 
-          roomCode, 
-          word: wordObj.word, 
+        // Server will handle duplicate detection and update all clients
+        socket?.emit('word-guessed', {
+          roomCode,
+          word: wordObj.word,
           wordObj: wordObj,
           guesser: playerName,
-          points: wordObj.points 
+          points: wordObj.points
         })
-        
-        // Dynamic bonus system - check if we hit any milestone
-        const nextMilestone = bonusMilestones.find(m => m === newGuessed.length)
-        if (nextMilestone) {
-          // Number of bonus words increases with each milestone
-          const bonusCount = 3 + Math.floor(bonusMilestones.indexOf(nextMilestone) / 2)
-          const bonusWords = selectWords(bonusCount)
-          setCurrentWords([...currentWords, ...bonusWords])
-          setBonusWordCount(bonusCount)
-          setShowBonusNotification(true)
-          setTimeout(() => setShowBonusNotification(false), 3000)
-          // Notify server about bonus words
-          socket?.emit('bonus-words-added', { roomCode, words: bonusWords })
-        }
-        
-        // Add more words if running low (safety net)
-        const remaining = currentWords.length - newGuessed.length
-        if (remaining <= 2 && !nextMilestone) {
-          setCurrentWords([...currentWords, ...selectWords(5)])
-        }
         break
       }
+
+      // Skip already guessed words for partial matching
+      if (guessedWords.some(w => w.word === wordObj.word)) continue
 
       // Check for partial match (90% or more similarity)
       const similarity = calculateSimilarity(input, wordObj.word)
@@ -405,48 +461,46 @@ export default function GameScreen() {
     // If exact match was found, we're done
     if (foundMatch) return
 
+    // If first duplicate, emit as word-guessed (server handles it, shows green with 0 points)
+    if (alreadyGuessed && !isSecondDuplicate) {
+      setGuess('')
+      const matchedWord = currentWords.find(w => w.word === input)
+      if (matchedWord) {
+        socket?.emit('word-guessed', {
+          roomCode,
+          word: matchedWord.word,
+          wordObj: matchedWord,
+          guesser: playerName,
+          points: matchedWord.points
+        })
+      }
+      return
+    }
+
     // If partial match found (90%+ similarity), award partial points
     if (partialMatch) {
       const partialPoints = Math.ceil(partialMatch.wordObj.points * 0.7) // 70% of points for partial match
-      const newGuessed = [...guessedWords, partialMatch.wordObj]
-      setGuessedWords(newGuessed)
       setGuess('')
-      
+
       // Emit to server with partial points
-      socket?.emit('word-guessed', { 
-        roomCode, 
-        word: partialMatch.wordObj.word, 
+      socket?.emit('word-guessed', {
+        roomCode,
+        word: partialMatch.wordObj.word,
         wordObj: { ...partialMatch.wordObj, points: partialPoints },
         guesser: playerName,
         points: partialPoints,
         partial: true,
         actualGuess: input
       })
-      
+
       // Show notification about partial match
-      alert(`Close enough! "${input}" → "${partialMatch.wordObj.word}" (${partialPoints} points)`)
-      
-      // Dynamic bonus system
-      const nextMilestone = bonusMilestones.find(m => m === newGuessed.length)
-      if (nextMilestone) {
-        const bonusCount = 3 + Math.floor(bonusMilestones.indexOf(nextMilestone) / 2)
-        const bonusWords = selectWords(bonusCount)
-        setCurrentWords([...currentWords, ...bonusWords])
-        setBonusWordCount(bonusCount)
-        setShowBonusNotification(true)
-        setTimeout(() => setShowBonusNotification(false), 3000)
-        socket?.emit('bonus-words-added', { roomCode, words: bonusWords })
-      }
-      
-      const remaining = currentWords.length - newGuessed.length
-      if (remaining <= 2 && !nextMilestone) {
-        setCurrentWords([...currentWords, ...selectWords(5)])
-      }
+      setNotification({ message: `Close enough! "${input}" → "${partialMatch.wordObj.word}" (${partialPoints} points)`, type: 'success' })
+      setTimeout(() => setNotification(null), 3000)
       return
     }
 
-    // If no match found at all, it's a wrong guess
-    if (!foundMatch && input.length > 0) {
+    // If no match found at all or second duplicate, it's a wrong guess
+    if ((!foundMatch || isSecondDuplicate) && input.length > 0) {
       setGuess('')
       socket?.emit('wrong-guess', {
         roomCode,
@@ -465,10 +519,10 @@ export default function GameScreen() {
   const handleEndTurn = () => {
     setTurnActive(false)
     // Don't set gamePhase here - let the socket event handle it for everyone
-    
+
     const totalPoints = guessedWords.reduce((sum, w) => sum + w.points, 0)
-    socket?.emit('end-turn', { 
-      roomCode, 
+    socket?.emit('end-turn', {
+      roomCode,
       guessedCount: guessedWords.length,
       skippedCount: 0,
       totalPoints,
@@ -494,7 +548,8 @@ export default function GameScreen() {
     if (!isMyTurn) {
       // Emit skip-guesser-turn event to server
       socket?.emit('skip-guesser-turn', { roomCode, playerName })
-      alert('You have skipped your guessing turn!')
+      setNotification({ message: 'You have skipped your guessing turn!', type: 'info' })
+      setTimeout(() => setNotification(null), 3000)
     }
   }
 
@@ -535,18 +590,42 @@ export default function GameScreen() {
 
   const handleEndGame = () => {
     if (!isHost) return
-    if (confirm('Are you sure you want to end the game for everyone?')) {
-      socket?.emit('admin-end-game', { roomCode })
-      setShowAdminPanel(false)
+    setConfirmDialog({
+      message: 'Are you sure you want to end the game for everyone?',
+      onConfirm: () => {
+        socket?.emit('admin-end-game', { roomCode })
+        setShowAdminPanel(false)
+        setConfirmDialog(null)
+      }
+    })
+  }
+
+  const copyRoomCode = () => {
+    if (roomCode) {
+      navigator.clipboard.writeText(roomCode)
+      setNotification({ message: 'Room code copied to clipboard!', type: 'success' })
+      setTimeout(() => setNotification(null), 2000)
     }
+  }
+
+  const handleChangeTeam = () => {
+    // Switch to opposite team (0 -> 1, 1 -> 0)
+    const newTeam = myTeam === 0 ? 1 : 0
+    joinTeam(newTeam)
+    setNotification({ message: `Switched to Team ${newTeam + 1}`, type: 'info' })
+    setTimeout(() => setNotification(null), 2000)
   }
 
   const handleAdminSkipTurn = () => {
     if (!isHost) return
-    if (confirm('Skip the current turn and move to the next team?')) {
-      socket?.emit('admin-skip-turn', { roomCode })
-      setShowAdminPanel(false)
-    }
+    setConfirmDialog({
+      message: 'Skip the current turn and move to the next team?',
+      onConfirm: () => {
+        socket?.emit('admin-skip-turn', { roomCode })
+        setShowAdminPanel(false)
+        setConfirmDialog(null)
+      }
+    })
   }
 
   const handlePauseTimer = () => {
@@ -559,30 +638,85 @@ export default function GameScreen() {
     socket?.emit('admin-resume-timer', { roomCode })
   }
 
+  const handleToggleTeamSwitching = () => {
+    if (!isHost) return
+    socket?.emit('admin-toggle-team-switching', { roomCode })
+    setShowAdminPanel(false)
+  }
+
+  const handleRandomizeTeams = () => {
+    if (!isHost) return
+    socket?.emit('admin-randomize-teams', { roomCode })
+    setShowAdminPanel(false)
+  }
+
   return (
     <div className="space-y-3 md:space-y-4 lg:space-y-6 px-2 sm:px-0">
-      {/* Top Right Controls - Fixed Position */}
-      <div className="fixed top-4 right-4 z-50 flex gap-2">
-        {/* Admin Panel Button (Host Only) */}
-        {isHost && (
-          <button
-            onClick={() => setShowAdminPanel(true)}
-            className="px-3 sm:px-4 md:px-5 py-2 sm:py-2.5 glass-strong rounded-lg md:rounded-xl hover:bg-purple-500/20 transition-colors flex items-center gap-2 text-purple-400 text-sm md:text-base font-medium border border-purple-500/30 hover:border-purple-500/50 shadow-lg"
-          >
-            <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
-            <span className="hidden sm:inline">Admin</span>
-          </button>
-        )}
-        
-        {/* Leave Game Button */}
-        <button
-          onClick={() => setShowLeaveConfirm(true)}
-          className="px-3 sm:px-4 md:px-5 py-2 sm:py-2.5 glass-strong rounded-lg md:rounded-xl hover:bg-red-500/20 transition-colors flex items-center gap-2 text-red-400 text-sm md:text-base font-medium border border-red-500/30 hover:border-red-500/50 shadow-lg"
-        >
-          <LogOut className="w-4 h-4 sm:w-5 sm:h-5" />
-          <span>Leave Game</span>
-        </button>
+      {/* Top Header Bar - Fixed Position */}
+      <div className="fixed top-0 left-0 right-0 z-40 pb-4 pt-4 px-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+          {/* Left - Room Code and Change Team */}
+          <div className="flex gap-2">
+            <div className="glass-strong rounded-xl px-3 sm:px-4 py-2.5 flex items-center gap-2 border border-cyan-500/30 shadow-lg h-10 sm:h-11">
+              <span className="text-gray-400 text-xs sm:text-sm">Room Code:</span>
+              <span className="text-sm sm:text-base font-mono font-bold tracking-wider text-cyan-300">{roomCode}</span>
+              <button
+                onClick={copyRoomCode}
+                className="p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                title="Copy room code"
+              >
+                <Copy className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              </button>
+            </div>
+
+            {/* Change Team Button - Disabled during active turn or when teams are locked */}
+            <button
+              onClick={handleChangeTeam}
+              disabled={turnActive || teamSwitchingLocked}
+              className={`px-3 sm:px-4 py-2.5 glass-strong rounded-xl transition-colors flex items-center gap-2 text-sm font-medium border shadow-lg h-10 sm:h-11 ${turnActive || teamSwitchingLocked
+                  ? 'border-gray-500/30 text-gray-500 cursor-not-allowed opacity-50'
+                  : 'border-green-500/30 text-green-400 hover:bg-green-500/20 hover:border-green-500/50'
+                }`}
+              title={
+                turnActive
+                  ? 'Cannot change teams during an active turn'
+                  : teamSwitchingLocked
+                    ? 'Team switching is locked by the host'
+                    : 'Switch to opposite team'
+              }
+            >
+              <UserCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span className="hidden sm:inline">Change Team</span>
+            </button>
+          </div>
+
+          {/* Right - Control Buttons */}
+          <div className="flex gap-2">
+            {/* Admin Panel Button (Host Only) */}
+            {isHost && (
+              <button
+                onClick={() => setShowAdminPanel(true)}
+                className="px-3 sm:px-4 py-2.5 glass-strong rounded-xl hover:bg-purple-500/20 transition-colors flex items-center gap-2 text-purple-400 text-sm font-medium border border-purple-500/30 hover:border-purple-500/50 shadow-lg h-10 sm:h-11"
+              >
+                <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span className="hidden sm:inline">Admin</span>
+              </button>
+            )}
+
+            {/* Leave Game Button */}
+            <button
+              onClick={() => setShowLeaveConfirm(true)}
+              className="px-3 sm:px-4 py-2.5 glass-strong rounded-xl hover:bg-red-500/20 transition-colors flex items-center gap-2 text-red-400 text-sm font-medium border border-red-500/30 hover:border-red-500/50 shadow-lg h-10 sm:h-11"
+            >
+              <LogOut className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span className="hidden xs:inline">Leave</span>
+            </button>
+          </div>
+        </div>
       </div>
+
+      {/* Main Content - Add top padding to account for fixed header */}
+      <div className="pt-14 sm:pt-2"></div>
 
       {/* Leave Confirmation Modal */}
       {showLeaveConfirm && (
@@ -656,21 +790,32 @@ export default function GameScreen() {
                                 Describer
                               </span>
                             )}
+                            {player === playerName && (
+                              <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full">
+                                You (Host)
+                              </span>
+                            )}
                           </div>
                           <div className="flex gap-2">
-                            <button
-                              onClick={() => handleMakeDescriber(teamIndex, playerIndex)}
-                              className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-yellow-500/20 transition-colors text-yellow-400 border border-yellow-500/30"
-                            >
-                              Make Describer
-                            </button>
-                            <button
-                              onClick={() => handleKickPlayer(player)}
-                              className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-red-500/20 transition-colors text-red-400 border border-red-500/30 flex items-center gap-1"
-                            >
-                              <UserX className="w-3 h-3" />
-                              Kick
-                            </button>
+                            {/* Don't show make describer button if already the describer */}
+                            {gameState.currentDescriberIndex?.[teamIndex] !== playerIndex && (
+                              <button
+                                onClick={() => handleMakeDescriber(teamIndex, playerIndex)}
+                                className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-yellow-500/20 transition-colors text-yellow-400 border border-yellow-500/30"
+                              >
+                                Make Describer
+                              </button>
+                            )}
+                            {/* Don't show kick button for the host themselves */}
+                            {player !== playerName && (
+                              <button
+                                onClick={() => handleKickPlayer(player)}
+                                className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-red-500/20 transition-colors text-red-400 border border-red-500/30 flex items-center gap-1"
+                              >
+                                <UserX className="w-3 h-3" />
+                                Kick
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -700,6 +845,42 @@ export default function GameScreen() {
                 >
                   <Trophy className="w-5 h-5" />
                   End Game
+                </button>
+              </div>
+            </div>
+
+            {/* Team Management Section */}
+            <div className="mb-6">
+              <h4 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                <Users className="w-5 h-5 text-purple-400" />
+                Team Management
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={handleToggleTeamSwitching}
+                  className={`px-4 py-3 glass-strong rounded-lg transition-colors flex items-center justify-center gap-2 border ${teamSwitchingLocked
+                    ? 'hover:bg-green-500/20 text-green-400 border-green-500/30'
+                    : 'hover:bg-orange-500/20 text-orange-400 border-orange-500/30'
+                    }`}
+                >
+                  {teamSwitchingLocked ? (
+                    <>
+                      <Unlock className="w-5 h-5" />
+                      Unlock Teams
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-5 h-5" />
+                      Lock Teams
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={handleRandomizeTeams}
+                  className="px-4 py-3 glass-strong rounded-lg hover:bg-purple-500/20 transition-colors flex items-center justify-center gap-2 text-purple-400 border border-purple-500/30"
+                >
+                  <Shuffle className="w-5 h-5" />
+                  Randomize Teams
                 </button>
               </div>
             </div>
@@ -735,23 +916,22 @@ export default function GameScreen() {
             <div className="text-xs text-gray-500 mb-1">Players:</div>
             <div className="flex flex-wrap gap-1">
               {gameState.teams[0].players.map((player, idx) => {
-                const isDescriber = gameState.currentTeamIndex === 0 && 
-                                   gameState.currentDescriberIndex[0] === idx
+                const isDescriber = gameState.currentTeamIndex === 0 &&
+                  gameState.currentDescriberIndex[0] === idx
                 const isMenuOpen = showHostMenu?.teamIndex === 0 && showHostMenu?.playerIndex === idx
                 return (
                   <div key={player} className="relative">
                     <button
                       onClick={() => isHost ? setShowHostMenu(isMenuOpen ? null : { teamIndex: 0, playerIndex: idx }) : null}
                       disabled={!isHost || player === playerName}
-                      className={`text-xs px-2 py-0.5 rounded ${
-                        isDescriber 
-                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' 
-                          : 'bg-blue-500/10 text-blue-300'
-                      } ${isHost && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
+                      className={`text-xs px-2 py-0.5 rounded ${isDescriber
+                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                        : 'bg-blue-500/10 text-blue-300'
+                        } ${isHost && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
                     >
                       {player}{isDescriber ? ' 📢' : ''}{player === playerName ? ' (you)' : ''}
                     </button>
-                    
+
                     {/* Host Menu */}
                     {isHost && isMenuOpen && player !== playerName && (
                       <div className="absolute top-full left-0 mt-1 z-30 glass-strong rounded-lg border border-white/20 overflow-hidden shadow-xl min-w-[140px]">
@@ -792,23 +972,22 @@ export default function GameScreen() {
             <div className="text-xs text-gray-500 mb-1">Players:</div>
             <div className="flex flex-wrap gap-1">
               {gameState.teams[1].players.map((player, idx) => {
-                const isDescriber = gameState.currentTeamIndex === 1 && 
-                                   gameState.currentDescriberIndex[1] === idx
+                const isDescriber = gameState.currentTeamIndex === 1 &&
+                  gameState.currentDescriberIndex[1] === idx
                 const isMenuOpen = showHostMenu?.teamIndex === 1 && showHostMenu?.playerIndex === idx
                 return (
                   <div key={player} className="relative">
                     <button
                       onClick={() => isHost ? setShowHostMenu(isMenuOpen ? null : { teamIndex: 1, playerIndex: idx }) : null}
                       disabled={!isHost || player === playerName}
-                      className={`text-xs px-2 py-0.5 rounded ${
-                        isDescriber 
-                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' 
-                          : 'bg-red-500/10 text-red-300'
-                      } ${isHost && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
+                      className={`text-xs px-2 py-0.5 rounded ${isDescriber
+                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                        : 'bg-red-500/10 text-red-300'
+                        } ${isHost && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
                     >
                       {player}{isDescriber ? ' 📢' : ''}{player === playerName ? ' (you)' : ''}
                     </button>
-                    
+
                     {/* Host Menu */}
                     {isHost && isMenuOpen && player !== playerName && (
                       <div className="absolute top-full left-0 mt-1 z-30 glass-strong rounded-lg border border-white/20 overflow-hidden shadow-xl min-w-[140px]">
@@ -836,37 +1015,25 @@ export default function GameScreen() {
 
       {/* Role Indicator */}
       {gamePhase === 'playing' && (
-        <div className={`glass-strong rounded-lg p-3 md:p-4 text-center border ${
-            isMyTurn 
-              ? 'border-purple-500/30 bg-purple-500/5' 
-              : isGuesser 
-              ? 'border-green-500/30 bg-green-500/5' 
-              : 'border-gray-500/30 bg-gray-500/5'
+        <div className={`glass-strong rounded-lg p-3 md:p-4 text-center border ${isMyTurn
+          ? 'border-purple-500/30 bg-purple-500/5'
+          : isGuesser
+            ? 'border-green-500/30 bg-green-500/5'
+            : 'border-gray-500/30 bg-gray-500/5'
           }`}
         >
           <div className="flex items-center justify-center gap-2">
             <Users className="w-5 h-5 opacity-60" />
             <span className="font-semibold text-lg tracking-wide">
-              {isMyTurn 
-                ? 'DESCRIBING' 
-                : isGuesser 
-                ? 'GUESSING' 
-                : 'WATCHING'}
+              {isMyTurn
+                ? 'DESCRIBING'
+                : isGuesser
+                  ? 'GUESSING'
+                  : 'WATCHING'}
             </span>
           </div>
         </div>
       )}
-
-      {/* Bonus Words Notification */}
-      {showBonusNotification && (
-        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 glass-strong rounded-2xl p-6 border-2 border-yellow-500/40 bg-yellow-500/10">
-          <div className="text-center">
-            <div className="text-2xl font-bold text-yellow-400 mb-1">BONUS!</div>
-            <div className="text-white">+{bonusWordCount} Extra Words Added!</div>
-          </div>
-        </div>
-      )}
-
       {/* Turn Start */}
       {gamePhase === 'turn-start' && (
         <div className="glass-strong rounded-xl sm:rounded-2xl p-4 sm:p-6 md:p-8 text-center border border-white/10">
@@ -908,10 +1075,9 @@ export default function GameScreen() {
       {gamePhase === 'playing' && (
         <>
           {/* Timer */}
-          <div className={`glass-strong rounded-lg md:rounded-xl p-3 sm:p-4 md:p-6 text-center border transition-colors ${
-              timeRemaining <= 10 
-                ? 'border-red-500/40 bg-red-500/5' 
-                : 'border-blue-500/30'
+          <div className={`glass-strong rounded-lg md:rounded-xl p-3 sm:p-4 md:p-6 text-center border transition-colors ${timeRemaining <= 10
+            ? 'border-red-500/40 bg-red-500/5'
+            : 'border-blue-500/30'
             }`}
           >
             <div className="flex items-center justify-center gap-2 sm:gap-3 md:gap-4">
@@ -928,13 +1094,14 @@ export default function GameScreen() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 sm:gap-2 md:gap-3">
                 {currentWords.map((wordObj, index) => {
                   const isGuessed = guessedWords.some(w => w.word === wordObj.word)
-                  
+
                   return (
                     <div
                       key={`${wordObj.word}-${index}`}
-                      className={`glass-strong rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border ${getDifficultyColor(wordObj.difficulty)} ${
-                        isGuessed ? 'opacity-30 line-through bg-green-500/20' : 'transition-opacity'
-                      }`}
+                      className={isGuessed
+                        ? 'rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border transition-all bg-green-900 border-green-500'
+                        : `glass-strong rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border transition-all ${getDifficultyColor(wordObj.difficulty)}`
+                      }
                     >
                       <div className="text-center">
                         <div className="flex items-center justify-center gap-1.5 mb-1.5">
@@ -957,18 +1124,39 @@ export default function GameScreen() {
               </div>
 
               {/* Wrong Guesses Display for Describer */}
-              {wrongGuesses.length > 0 && (
-                <div className="glass-strong rounded-lg sm:rounded-xl p-3 sm:p-4 border border-red-500/30">
-                  <div className="text-xs sm:text-sm text-red-400 font-semibold mb-2">Wrong Guesses:</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {wrongGuesses.map((wrong, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2 sm:px-3 py-1 sm:py-1.5 bg-red-500/20 border border-red-500/40 rounded text-xs sm:text-sm text-red-300 font-medium"
-                      >
-                        {wrong.word} <span className="text-red-400/60">({wrong.guesser})</span>
-                      </span>
-                    ))}
+              {(wrongGuesses.length > 0 || guessedByPlayer.length > 0) && (
+                <div className="glass-strong rounded-lg sm:rounded-xl p-3 sm:p-4 border border-white/20">
+                  <div className="text-xs sm:text-sm text-gray-300 font-semibold mb-2">Player Guesses:</div>
+                  <div className="space-y-2">
+                    {/* Group guesses by player */}
+                    {Array.from(new Set([...wrongGuesses.map(w => w.guesser), ...guessedByPlayer.map(g => g.guesser)])).map(guesser => {
+                      const playerWrong = wrongGuesses.filter(w => w.guesser === guesser)
+                      const playerCorrect = guessedByPlayer.filter(g => g.guesser === guesser)
+
+                      return (
+                        <div key={guesser} className="glass-strong rounded-lg p-2">
+                          <div className="text-xs font-bold text-blue-300 mb-1.5">{guesser}:</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {playerCorrect.map((correct, idx) => (
+                              <span
+                                key={`correct-${idx}`}
+                                className="px-2 py-1 bg-green-500/20 border border-green-500/40 rounded text-xs text-green-300 font-medium"
+                              >
+                                {correct.word}
+                              </span>
+                            ))}
+                            {playerWrong.map((wrong, idx) => (
+                              <span
+                                key={`wrong-${idx}`}
+                                className="px-2 py-1 bg-red-500/20 border border-red-500/40 rounded text-xs text-red-300 font-medium"
+                              >
+                                {wrong.word}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -996,19 +1184,40 @@ export default function GameScreen() {
                 </button>
               </div>
 
-              {/* Wrong Guesses Display */}
-              {wrongGuesses.length > 0 && (
+              {/* Guesses Display */}
+              {(wrongGuesses.length > 0 || guessedByPlayer.length > 0) && (
                 <div className="mt-3">
-                  <div className="text-xs sm:text-sm text-red-400 font-semibold mb-1.5">Wrong Guesses:</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {wrongGuesses.map((wrong, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2 py-1 bg-red-500/20 border border-red-500/40 rounded text-xs text-red-300"
-                      >
-                        {wrong.word} <span className="text-red-400/60">({wrong.guesser})</span>
-                      </span>
-                    ))}
+                  <div className="text-xs sm:text-sm text-gray-300 font-semibold mb-1.5">Player Guesses:</div>
+                  <div className="space-y-2">
+                    {/* Group guesses by player */}
+                    {Array.from(new Set([...wrongGuesses.map(w => w.guesser), ...guessedByPlayer.map(g => g.guesser)])).map(guesser => {
+                      const playerWrong = wrongGuesses.filter(w => w.guesser === guesser)
+                      const playerCorrect = guessedByPlayer.filter(g => g.guesser === guesser)
+
+                      return (
+                        <div key={guesser} className="glass-strong rounded-lg p-2">
+                          <div className="text-xs font-bold text-blue-300 mb-1.5">{guesser}:</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {playerCorrect.map((correct, idx) => (
+                              <span
+                                key={`correct-${idx}`}
+                                className="px-2 py-1 bg-green-500/20 border border-green-500/40 rounded text-xs text-green-300 font-medium"
+                              >
+                                {correct.word}
+                              </span>
+                            ))}
+                            {playerWrong.map((wrong, idx) => (
+                              <span
+                                key={`wrong-${idx}`}
+                                className="px-2 py-1 bg-red-500/20 border border-red-500/40 rounded text-xs text-red-300 font-medium"
+                              >
+                                {wrong.word}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -1031,13 +1240,14 @@ export default function GameScreen() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 sm:gap-2 md:gap-3">
                 {currentWords.map((wordObj, index) => {
                   const isGuessed = guessedWords.some(w => w.word === wordObj.word)
-                  
+
                   return (
                     <div
                       key={`${wordObj.word}-${index}`}
-                      className={`glass-strong rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border ${getDifficultyColor(wordObj.difficulty)} ${
-                        isGuessed ? 'opacity-30 line-through bg-green-500/20' : ''
-                      }`}
+                      className={isGuessed
+                        ? 'rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border transition-all bg-green-900 border-green-500'
+                        : `glass-strong rounded-lg sm:rounded-xl p-2 sm:p-3 md:p-4 border transition-all ${getDifficultyColor(wordObj.difficulty)}`
+                      }
                     >
                       <div className="text-center">
                         <div className="flex items-center justify-center gap-1.5 mb-1.5">
@@ -1059,19 +1269,40 @@ export default function GameScreen() {
                 })}
               </div>
 
-              {/* Wrong Guesses Display for Opposite Team */}
-              {wrongGuesses.length > 0 && (
-                <div className="glass-strong rounded-lg sm:rounded-xl p-3 sm:p-4 border border-red-500/30">
-                  <div className="text-xs sm:text-sm text-red-400 font-semibold mb-2">Wrong Guesses:</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {wrongGuesses.map((wrong, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2 sm:px-3 py-1 sm:py-1.5 bg-red-500/20 border border-red-500/40 rounded text-xs sm:text-sm text-red-300 font-medium"
-                      >
-                        {wrong.word} <span className="text-red-400/60">({wrong.guesser})</span>
-                      </span>
-                    ))}
+              {/* Guesses Display for Opposite Team */}
+              {(wrongGuesses.length > 0 || guessedByPlayer.length > 0) && (
+                <div className="glass-strong rounded-lg sm:rounded-xl p-3 sm:p-4 border border-white/20">
+                  <div className="text-xs sm:text-sm text-gray-300 font-semibold mb-2">Player Guesses:</div>
+                  <div className="space-y-2">
+                    {/* Group guesses by player */}
+                    {Array.from(new Set([...wrongGuesses.map(w => w.guesser), ...guessedByPlayer.map(g => g.guesser)])).map(guesser => {
+                      const playerWrong = wrongGuesses.filter(w => w.guesser === guesser)
+                      const playerCorrect = guessedByPlayer.filter(g => g.guesser === guesser)
+
+                      return (
+                        <div key={guesser} className="glass-strong rounded-lg p-2">
+                          <div className="text-xs font-bold text-blue-300 mb-1.5">{guesser}:</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {playerCorrect.map((correct, idx) => (
+                              <span
+                                key={`correct-${idx}`}
+                                className="px-2 py-1 bg-green-500/20 border border-green-500/40 rounded text-xs text-green-300 font-medium"
+                              >
+                                {correct.word}
+                              </span>
+                            ))}
+                            {playerWrong.map((wrong, idx) => (
+                              <span
+                                key={`wrong-${idx}`}
+                                className="px-2 py-1 bg-red-500/20 border border-red-500/40 rounded text-xs text-red-300 font-medium"
+                              >
+                                {wrong.word}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -1094,46 +1325,15 @@ export default function GameScreen() {
           <div className="glass rounded-lg sm:rounded-xl p-3 sm:p-4 flex justify-around text-center gap-2">
             <div className="flex-1">
               <div className="text-lg sm:text-xl md:text-2xl font-bold text-green-400">{guessedWords.length}</div>
-              <div className="text-[10px] sm:text-xs md:text-sm text-gray-400">Words</div>
+              <div className="text-[10px] sm:text-xs md:text-sm text-gray-400">Total Words</div>
             </div>
             <div className="flex-1">
               <div className="text-lg sm:text-xl md:text-2xl font-bold text-blue-400">
                 {guessedWords.reduce((sum, w) => sum + w.points, 0)}
               </div>
-              <div className="text-[10px] sm:text-xs md:text-sm text-gray-400">Points</div>
+              <div className="text-[10px] sm:text-xs md:text-sm text-gray-400">Total Points</div>
             </div>
           </div>
-
-          {/* Who Guessed What */}
-          {guessedByPlayer.length > 0 && (
-            <div className="glass rounded-lg sm:rounded-xl p-3 sm:p-4 border border-green-500/20">
-              <h3 className="text-xs sm:text-sm font-semibold mb-2 sm:mb-3 text-gray-400 flex items-center gap-1.5 sm:gap-2">
-                <Zap className="w-3 h-3 sm:w-4 sm:h-4 text-green-400 opacity-60" />
-                Recent Guesses:
-              </h3>
-              <div className="space-y-1.5 sm:space-y-2 max-h-32 sm:max-h-40 overflow-y-auto custom-scrollbar">
-                {guessedByPlayer.slice().reverse().map((item, index) => (
-                  <div 
-                    key={index}
-                    className="glass-strong rounded-md sm:rounded-lg p-1.5 sm:p-2 flex items-center justify-between text-xs sm:text-sm hover:bg-white/5 transition-colors"
-                  >
-                    <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
-                      <span className="w-6 h-6 sm:w-8 sm:h-8 bg-green-500/20 border border-green-500/30 rounded-full flex items-center justify-center font-bold text-[10px] sm:text-xs flex-shrink-0">
-                        {item.guesser.charAt(0).toUpperCase()}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-bold text-green-400 truncate text-xs sm:text-sm">{item.word}</div>
-                        <div className="text-[10px] sm:text-xs text-gray-400 truncate">by {item.guesser}</div>
-                      </div>
-                    </div>
-                    <div className="text-blue-400 font-bold bg-blue-500/20 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[10px] sm:text-xs flex-shrink-0 ml-2">
-                      +{item.points}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
 
@@ -1155,7 +1355,7 @@ export default function GameScreen() {
             </div>
             <div className="glass rounded-lg sm:rounded-xl p-3 sm:p-4 border border-blue-500/30">
               <div className="text-3xl sm:text-4xl md:text-5xl font-bold text-blue-400 mb-1 sm:mb-2">
-                {guessedWords.reduce((sum, w) => sum + w.points, 0)}
+                {guessedWords.reduce((sum, w) => sum + (typeof w.points === 'number' ? w.points : 0), 0)}
               </div>
               <div className="text-gray-400 text-xs sm:text-sm md:text-base flex items-center justify-center gap-0.5 sm:gap-1">
                 <Zap className="w-3 h-3 sm:w-4 sm:h-4 opacity-50" />
@@ -1171,15 +1371,14 @@ export default function GameScreen() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
                 {previousRoundWords.map((wordObj, index) => {
                   const wasGuessed = guessedWords.some(w => w.word === wordObj.word)
-                  
+
                   return (
                     <div
                       key={`prev-${wordObj.word}-${index}`}
-                      className={`glass-strong rounded-lg p-2 sm:p-3 border ${
-                        wasGuessed 
-                          ? 'border-green-500/50 bg-green-500/10' 
-                          : 'border-red-500/50 bg-red-500/10'
-                      }`}
+                      className={`glass-strong rounded-lg p-2 sm:p-3 border ${wasGuessed
+                        ? 'border-green-500/50 bg-green-500/10'
+                        : 'border-red-500/50 bg-red-500/10'
+                        }`}
                     >
                       <div className="text-center">
                         <div className="flex items-center justify-center gap-1 mb-1">
@@ -1202,6 +1401,58 @@ export default function GameScreen() {
             </div>
           )}
 
+          {/* Individual Player Scoring */}
+          {guessedByPlayer.length > 0 && (
+            <div className="mb-4 sm:mb-6 md:mb-8">
+              <h3 className="text-lg sm:text-xl font-semibold mb-3 text-cyan-400">Player Contributions</h3>
+              <div className="space-y-3">
+                {Array.from(new Set(guessedByPlayer.map(g => g.guesser)))
+                  .map(guesser => {
+                    const playerGuesses = guessedByPlayer.filter(g => g.guesser === guesser && !g.isDuplicate && g.points > 0)
+                    const totalPoints = playerGuesses.reduce((sum, g) => sum + (typeof g.points === 'number' ? g.points : 0), 0)
+                    return { guesser, playerGuesses, totalPoints }
+                  })
+                  .filter(({ playerGuesses }) => playerGuesses.length > 0)
+                  .sort((a, b) => b.totalPoints - a.totalPoints)
+                  .map(({ guesser, playerGuesses, totalPoints }, index) => (
+                    <div
+                      key={guesser}
+                      className="glass-strong rounded-lg p-3 sm:p-4 border border-cyan-500/30 hover:border-cyan-500/50 transition-colors"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg font-bold text-gray-400">#{index + 1}</span>
+                          <span className="font-bold text-base sm:text-lg text-cyan-300">{guesser}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Zap className="w-4 h-4 text-yellow-400" />
+                          <span className="text-xl sm:text-2xl font-bold text-yellow-400">{totalPoints}</span>
+                          <span className="text-xs text-gray-400">pts</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {playerGuesses.map((guess, idx) => {
+                          const validPoints = typeof guess.points === 'number' ? guess.points : 0
+                          const isDupe = validPoints === 0 || guess.isDuplicate
+                          return (
+                            <span
+                              key={idx}
+                              className={`text-xs px-2 py-1 rounded border ${isDupe
+                                ? 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+                                : 'bg-green-500/20 text-green-300 border-green-500/30'
+                                }`}
+                            >
+                              {guess.word} {isDupe ? '(duplicate)' : `(+${validPoints})`}
+                            </span>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
           {isMyTurn && (
             <button
               onClick={handleNextTurnButton}
@@ -1215,6 +1466,63 @@ export default function GameScreen() {
               Waiting for {currentDescriber}...
             </div>
           )}
+        </div>
+      )}
+
+      {/* Custom Notification */}
+      {notification && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 animate-fade-in w-11/12 sm:w-auto">
+          <div className={`glass-strong rounded-xl px-8 py-4 border-2 shadow-2xl min-w-[400px] max-w-2xl ${notification.type === 'success' ? 'border-green-500/50 bg-green-500/10' :
+            notification.type === 'warning' ? 'border-yellow-500/50 bg-yellow-500/10' :
+              'border-cyan-500/50 bg-cyan-500/10'
+            }`}>
+            <div className={`text-center font-semibold text-base sm:text-lg whitespace-pre-line ${notification.type === 'success' ? 'text-green-300' :
+              notification.type === 'warning' ? 'text-yellow-300' :
+                'text-cyan-300'
+              }`}>
+              {notification.message}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bonus Words Notification */}
+      {showBonusNotification && (
+        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 animate-fade-in w-11/12 sm:w-auto">
+          <div className="glass-strong rounded-xl px-8 py-4 border-2 border-purple-500/50 bg-purple-500/10 shadow-2xl min-w-[400px] max-w-2xl">
+            <div className="text-center">
+              <div className="text-2xl font-bold text-purple-300 mb-1">🎉 Bonus Words!</div>
+              <div className="text-lg text-purple-200">+{bonusWordCount} extra words added!</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="glass-strong rounded-2xl p-6 border-2 border-yellow-500/50 bg-yellow-500/5 shadow-2xl max-w-md mx-4">
+            <div className="text-center mb-6">
+              <div className="text-xl font-semibold text-yellow-300 mb-2">⚠️ Confirm Action</div>
+              <div className="text-base text-gray-200">{confirmDialog.message}</div>
+            </div>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => {
+                  confirmDialog.onConfirm()
+                }}
+                className="px-6 py-2.5 bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/40 rounded-lg font-semibold text-yellow-300 transition-colors"
+              >
+                Yes, Confirm
+              </button>
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="px-6 py-2.5 bg-gray-500/20 hover:bg-gray-500/30 border border-gray-500/40 rounded-lg font-semibold text-gray-300 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -1,12 +1,14 @@
 'use client'
 
+import { motion } from 'framer-motion'
+import { Heart, Users, Wifi, WifiOff } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { useGame } from './GameContext'
-import { motion } from 'framer-motion'
-import { Users, Wifi, WifiOff } from 'lucide-react'
 
 export default function RoomScreen() {
   const { createRoom, joinRoom, connected } = useGame()
+  const router = useRouter()
   const [mode, setMode] = useState<'select' | 'create' | 'join'>('select')
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
@@ -34,17 +36,25 @@ export default function RoomScreen() {
       >
         {/* Header */}
         <div className="text-center mb-6 md:mb-8">
+          <motion.div
+            initial={{ scale: 0.5, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ type: 'spring', stiffness: 200 }}
+            className="flex justify-center mb-4"
+          >
+            <img src="/taboo-logo.png" alt="Taboo Logo" className="w-32 h-32 md:w-40 md:h-40" />
+          </motion.div>
           <motion.h1
             initial={{ scale: 0.5 }}
             animate={{ scale: 1 }}
-            transition={{ type: 'spring', stiffness: 200 }}
+            transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
             className="text-4xl md:text-6xl font-bold mb-3 md:mb-4 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent"
           >
-             TABOO
+            TABOO
           </motion.h1>
-                  <p className="text-gray-300 text-base md:text-lg">Made by Ishpreet
+          <p className="text-gray-300 text-base md:text-lg">Made by Ishpreet & Ansh
           </p>
-          
+
           {/* Connection Status */}
           <div className="flex items-center justify-center gap-2 mt-4">
             {connected ? (
@@ -178,6 +188,22 @@ export default function RoomScreen() {
             </form>
           </motion.div>
         )}
+
+        {/* Donate Button */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.3 }}
+          className="mt-9"
+        >
+          <button
+            onClick={() => router.push('/donate')}
+            className="w-full py-3 px-6 bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-600 hover:to-red-600 rounded-xl font-semibold text-white transition-all transform hover:scale-105 flex items-center justify-center gap-2 text-sm md:text-base"
+          >
+            <Heart className="w-4 h-4 fill-white" />
+            Support Us
+          </button>
+        </motion.div>
       </motion.div>
     </div>
   )
