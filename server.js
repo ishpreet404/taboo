@@ -28,16 +28,17 @@ app.use(express.static("public"));
 const gameRooms = new Map();
 
 // Word database for bonus words
-const fs = require('fs');
-const wordList = fs.readFileSync(path.join(__dirname, 'wordlist.txt'), 'utf8')
-	.split('\n')
-	.filter(w => w.trim() && !w.startsWith('TABOO') && !w.startsWith('//'))
-	.map(w => w.trim());
+const fs = require("fs");
+const wordList = fs
+	.readFileSync(path.join(__dirname, "wordlist.txt"), "utf8")
+	.split("\n")
+	.filter((w) => w.trim() && !w.startsWith("TABOO") && !w.startsWith("//"))
+	.map((w) => w.trim());
 
 // Helper function to generate bonus words
 function generateBonusWords(count) {
 	const words = [];
-	const difficulties = ['easy', 'medium', 'hard'];
+	const difficulties = ["easy", "medium", "hard"];
 	const usedIndices = new Set();
 
 	for (let i = 0; i < count; i++) {
@@ -48,8 +49,27 @@ function generateBonusWords(count) {
 
 		usedIndices.add(randomIndex);
 		const word = wordList[randomIndex].trim().toUpperCase();
-		const difficulty = difficulties[Math.floor(Math.random() * difficulties.length)];
-		const points = difficulty === 'easy' ? 1 : difficulty === 'medium' ? 2 : 3;
+
+		// Determine difficulty based on word length
+		let difficulty, points;
+		const wordLength = word.length;
+
+		if (wordLength >= 12 || word.includes(" ")) {
+			difficulty = "hard";
+			if (wordLength >= 15) {
+				points = 30 + Math.floor(Math.random() * 11); // 30-40 for very long words
+			} else if (wordLength >= 13) {
+				points = 25 + Math.floor(Math.random() * 6); // 25-30 for long words
+			} else {
+				points = 20 + Math.floor(Math.random() * 6); // 20-25 for hard words
+			}
+		} else if (wordLength >= 8) {
+			difficulty = "medium";
+			points = 12 + Math.floor(Math.random() * 5); // 12-16 points
+		} else {
+			difficulty = "easy";
+			points = 8 + Math.floor(Math.random() * 4); // 8-11 points
+		}
 
 		words.push({ word, difficulty, points });
 	}
@@ -169,7 +189,9 @@ io.on("connection", (socket) => {
 		if (room) {
 			// Check if team switching is locked
 			if (room.teamSwitchingLocked) {
-				socket.emit("error", { message: "Team switching is currently locked by the host" });
+				socket.emit("error", {
+					message: "Team switching is currently locked by the host",
+				});
 				return;
 			}
 
@@ -199,7 +221,9 @@ io.on("connection", (socket) => {
 						}
 
 						// Check if there's an active turn and send current turn state to the new player
-						const turnInProgress = room.gameState.currentWords && room.gameState.currentWords.length > 0;
+						const turnInProgress =
+							room.gameState.currentWords &&
+							room.gameState.currentWords.length > 0;
 
 						io.to(roomCode).emit("team-updated-midgame", {
 							room,
@@ -208,12 +232,18 @@ io.on("connection", (socket) => {
 							joinedTeam: teamName,
 							turnInProgress: turnInProgress,
 							currentWords: turnInProgress ? room.gameState.currentWords : null,
-							timeRemaining: turnInProgress ? room.gameState.timeRemaining : null,
-							currentTurnGuessedWords: room.gameState.currentTurnGuessedWords || [],
-							currentTurnWrongGuesses: room.gameState.currentTurnWrongGuesses || [],
+							timeRemaining: turnInProgress
+								? room.gameState.timeRemaining
+								: null,
+							currentTurnGuessedWords:
+								room.gameState.currentTurnGuessedWords || [],
+							currentTurnWrongGuesses:
+								room.gameState.currentTurnWrongGuesses || [],
 							guessedByPlayer: room.gameState.guessedByPlayer || [],
 						});
-						console.log(`Player ${player.name} switched to ${teamName} mid-game`);
+						console.log(
+							`Player ${player.name} switched to ${teamName} mid-game`
+						);
 						return;
 					}
 				}
@@ -324,11 +354,18 @@ io.on("connection", (socket) => {
 				// Add to guessed words list only if not duplicate
 				gs.currentTurnGuessedWords.push(word);
 			} else {
-				console.log(`Word "${word}" already guessed by someone else, ${guesser} gets 0 points`);
+				console.log(
+					`Word "${word}" already guessed by someone else, ${guesser} gets 0 points`
+				);
 			}
 
 			// Track who guessed this word (with actual points - 0 if duplicate)
-			gs.guessedByPlayer.push({ word, guesser, points: actualPoints, isDuplicate });
+			gs.guessedByPlayer.push({
+				word,
+				guesser,
+				points: actualPoints,
+				isDuplicate,
+			});
 
 			// Update team score (only if not duplicate)
 			if (!isDuplicate) {
@@ -337,16 +374,25 @@ io.on("connection", (socket) => {
 
 				// Track player contribution
 				if (!gs.playerContributions[guesser]) {
-					gs.playerContributions[guesser] = { points: 0, guessedWords: [], describedWords: [] };
+					gs.playerContributions[guesser] = {
+						points: 0,
+						guessedWords: [],
+						describedWords: [],
+					};
 				}
 				gs.playerContributions[guesser].points += points;
 				gs.playerContributions[guesser].guessedWords.push(word);
 
 				// Track describer's success
-				const currentDescriber = gs.teams[teamIndex].players[gs.currentDescriberIndex[teamIndex]];
+				const currentDescriber =
+					gs.teams[teamIndex].players[gs.currentDescriberIndex[teamIndex]];
 				if (currentDescriber) {
 					if (!gs.playerContributions[currentDescriber]) {
-						gs.playerContributions[currentDescriber] = { points: 0, guessedWords: [], describedWords: [] };
+						gs.playerContributions[currentDescriber] = {
+							points: 0,
+							guessedWords: [],
+							describedWords: [],
+						};
 					}
 					gs.playerContributions[currentDescriber].describedWords.push(word);
 				}
@@ -357,7 +403,8 @@ io.on("connection", (socket) => {
 
 				if (milestones.includes(currentCount)) {
 					// Generate bonus words on server
-					const bonusCount = 3 + Math.floor(milestones.indexOf(currentCount) / 2);
+					const bonusCount =
+						3 + Math.floor(milestones.indexOf(currentCount) / 2);
 					const bonusWords = generateBonusWords(bonusCount);
 
 					// Add to current words
@@ -367,14 +414,18 @@ io.on("connection", (socket) => {
 					gs.currentWords.push(...bonusWords);
 
 					// Broadcast bonus words to all players
-					io.to(roomCode).emit("bonus-words-sync", { words: bonusWords, count: bonusCount });
+					io.to(roomCode).emit("bonus-words-sync", {
+						words: bonusWords,
+						count: bonusCount,
+					});
 				}
 			}
 
 			// Ensure wordObj has valid points
 			const syncWordObj = {
 				...wordObj,
-				points: typeof wordObj.points === 'number' ? wordObj.points : actualPoints
+				points:
+					typeof wordObj.points === "number" ? wordObj.points : actualPoints,
 			};
 
 			io.to(roomCode).emit("word-guessed-sync", {
@@ -619,7 +670,7 @@ io.on("connection", (socket) => {
 								if (
 									teamIndex === currentTeamIndex &&
 									room.gameState.currentDescriberIndex[teamIndex] ===
-									teamPlayerIndex
+										teamPlayerIndex
 								) {
 									describerLeft = true;
 								}
@@ -643,7 +694,7 @@ io.on("connection", (socket) => {
 									if (
 										team.players.length > 0 &&
 										room.gameState.currentDescriberIndex[teamIndex] >=
-										team.players.length
+											team.players.length
 									) {
 										room.gameState.currentDescriberIndex[teamIndex] = 0;
 									}
@@ -754,7 +805,7 @@ io.on("connection", (socket) => {
 								if (
 									team.players.length > 0 &&
 									room.gameState.currentDescriberIndex[teamIndex] >=
-									team.players.length
+										team.players.length
 								) {
 									room.gameState.currentDescriberIndex[teamIndex] = 0;
 								}
@@ -866,8 +917,9 @@ io.on("connection", (socket) => {
 			// Emit turn skipped
 			io.to(roomCode).emit("turn-skipped", {
 				gameState: gs,
-				message: `Turn skipped by host. It's now ${gs.teams[gs.currentTeamIndex].name
-					}'s turn!`,
+				message: `Turn skipped by host. It's now ${
+					gs.teams[gs.currentTeamIndex].name
+				}'s turn!`,
 			});
 
 			console.log(`Host skipped turn in room ${roomCode}`);
@@ -884,7 +936,11 @@ io.on("connection", (socket) => {
 			io.to(roomCode).emit("team-switching-locked", {
 				locked: room.teamSwitchingLocked,
 			});
-			console.log(`Team switching ${room.teamSwitchingLocked ? 'locked' : 'unlocked'} in room ${roomCode}`);
+			console.log(
+				`Team switching ${
+					room.teamSwitchingLocked ? "locked" : "unlocked"
+				} in room ${roomCode}`
+			);
 		}
 	});
 
@@ -913,12 +969,12 @@ io.on("connection", (socket) => {
 			// If game is in progress, also update the game state
 			if (room.started && room.gameState) {
 				// Clear existing teams
-				room.gameState.teams.forEach(team => {
+				room.gameState.teams.forEach((team) => {
 					team.players = [];
 				});
 
 				// Add players to game state teams
-				allPlayers.forEach(player => {
+				allPlayers.forEach((player) => {
 					if (player.team !== null) {
 						room.gameState.teams[player.team].players.push(player.name);
 					}
@@ -993,7 +1049,7 @@ io.on("connection", (socket) => {
 								if (
 									teamIndex === currentTeamIndex &&
 									room.gameState.currentDescriberIndex[teamIndex] ===
-									teamPlayerIndex
+										teamPlayerIndex
 								) {
 									describerLeft = true;
 								}
@@ -1017,7 +1073,7 @@ io.on("connection", (socket) => {
 									if (
 										team.players.length > 0 &&
 										room.gameState.currentDescriberIndex[teamIndex] >=
-										team.players.length
+											team.players.length
 									) {
 										room.gameState.currentDescriberIndex[teamIndex] = 0;
 									}
