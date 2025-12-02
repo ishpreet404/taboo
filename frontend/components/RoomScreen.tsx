@@ -52,7 +52,7 @@ export default function RoomScreen() {
           >
             TABOO
           </motion.h1>
-          <p className="text-gray-300 text-base md:text-lg">Made by Ishpreet , Funded by Ansh
+          <p className="text-gray-300 text-base md:text-lg">Made by Ishpreet ,Funded by Ansh(1$),Cosmo(1Rs)
           </p>
 
           {/* Connection Status */}
