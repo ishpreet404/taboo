@@ -1,6 +1,5 @@
 'use client'
 
-import { generateRoundDistribution, wordDatabase } from '@/lib/wordDatabase'
 import { Clock, Copy, Lock, LogOut, Settings, Shield, Shuffle, SkipForward, Trophy, Unlock, UserCheck, Users, UserX, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
@@ -21,7 +20,6 @@ export default function GameScreen() {
   const [showAdminPanel, setShowAdminPanel] = useState(false)
   const [showBonusNotification, setShowBonusNotification] = useState(false)
   const [bonusWordCount, setBonusWordCount] = useState(0)
-  const [usedWordIndices, setUsedWordIndices] = useState<Set<number>>(new Set())
   const [bonusMilestones, setBonusMilestones] = useState<number[]>([6, 10, 14, 18, 22]) // Next bonus at 6, then 10, 14, 18, 22...
   const [showHostMenu, setShowHostMenu] = useState<{ teamIndex: number; playerIndex: number } | null>(null)
   const [notification, setNotification] = useState<{ message: string; type: 'info' | 'warning' | 'success' } | null>(null)
@@ -622,61 +620,8 @@ export default function GameScreen() {
     return shuffled
   }
 
-  // WORD DISTRIBUTION: Dynamic per round for variety
-  // Average target: 35% easy, 40% medium, 25% hard but varies each round
-  // Both teams get same distribution per round for fairness
-
-  const selectWords = (count: number, ensureHardWords: boolean = false) => {
-    // Get indices of words we haven't used yet, grouped by difficulty
-    let availableIndices = wordDatabase
-      .map((_, index) => index)
-      .filter(index => !usedWordIndices.has(index))
-
-    // If we've used more than 80% of words, reset the used words set
-    if (availableIndices.length < wordDatabase.length * 0.2) {
-      const newSet = new Set<number>()
-      setUsedWordIndices(newSet)
-      availableIndices = wordDatabase.map((_, index) => index)
-    }
-
-    // Group available words by difficulty
-    const easyIndices = shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'easy'))
-    const mediumIndices = shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'medium'))
-    const hardIndices = shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'hard'))
-
-    let selectedWords: any[] = []
-    const allSelectedIndices: number[] = []
-
-    // Use dynamic distribution for variety (changes each round)
-    const distribution = generateRoundDistribution(count)
-
-    // Select from each difficulty pool
-    const selectedEasy = easyIndices.slice(0, Math.min(distribution.easy, easyIndices.length))
-    const selectedMedium = mediumIndices.slice(0, Math.min(distribution.medium, mediumIndices.length))
-    const selectedHard = hardIndices.slice(0, Math.min(distribution.hard, hardIndices.length))
-
-    allSelectedIndices.push(...selectedEasy, ...selectedMedium, ...selectedHard)
-
-    // If we still need more words (pool exhausted for a difficulty), fill from others
-    const remaining = count - allSelectedIndices.length
-    if (remaining > 0) {
-      const unusedIndices = availableIndices.filter(i => !allSelectedIndices.includes(i))
-      const shuffledRemaining = shuffleArray(unusedIndices)
-      allSelectedIndices.push(...shuffledRemaining.slice(0, remaining))
-    }
-
-    selectedWords = allSelectedIndices.map(index => wordDatabase[index])
-
-    // Mark as used
-    setUsedWordIndices(prev => {
-      const newSet = new Set(prev)
-      allSelectedIndices.forEach(index => newSet.add(index))
-      return newSet
-    })
-
-    // Shuffle the words so easy/medium/hard aren't always in same order
-    return shuffleArray(selectedWords)
-  }
+  // NOTE: Word selection happens ONLY on the server to prevent client-side data leakage
+  // Words are sent to clients via socket events when a turn starts
 
   const startTurn = () => {
     // Don't generate words on client - server will do it
@@ -734,8 +679,9 @@ export default function GameScreen() {
     // Only allow guesses from team members who are guessing
     if (!isGuesser) return
 
-    // Block guesses once timer hits 0 on client side
-    if (timeRemaining <= 0) return
+    // Allow guesses even at timeRemaining = 0 - server has a grace period for network latency
+    // Only block if time is negative (should never happen but safety check)
+    if (timeRemaining < 0) return
 
     const input = guess.trim().toUpperCase()
     if (input.length === 0) return

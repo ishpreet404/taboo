@@ -63,6 +63,142 @@ try {
 	wordDatabaseJSON = null;
 }
 
+// Smart scoring for hard words based on word characteristics
+// Words that are more abstract, longer, or have complex suffixes get higher points
+function getHardWordPoints(word, min, max) {
+	const lowerWord = word.toLowerCase();
+
+	let score = min; // Start at minimum (26)
+
+	// === EASIER HARD WORDS (26-32 points) ===
+	// Common concepts that are relatively easy to describe
+	const easyHardWords = [
+		'openness', 'happiness', 'sadness', 'kindness', 'weakness', 'darkness',
+		'awareness', 'loneliness', 'forgiveness', 'thankfulness', 'friendship',
+		'leadership', 'membership', 'partnership', 'relationship', 'ownership',
+		'childhood', 'neighborhood', 'brotherhood', 'motherhood', 'fatherhood',
+		'freedom', 'boredom', 'wisdom', 'kingdom', 'random',
+		'growth', 'strength', 'health', 'wealth', 'death', 'truth', 'youth',
+		'anger', 'hunger', 'danger', 'stranger', 'murder', 'wonder',
+		'culture', 'nature', 'future', 'picture', 'structure', 'adventure',
+		'pressure', 'pleasure', 'treasure', 'measure', 'leisure',
+		'balance', 'distance', 'instance', 'substance', 'importance',
+		'difference', 'confidence', 'patience', 'violence', 'silence',
+		'experience', 'audience', 'science', 'absence', 'presence',
+		'knowledge', 'marriage', 'courage', 'language', 'damage', 'image',
+		'message', 'passage', 'storage', 'usage', 'package', 'garbage',
+		'privacy', 'accuracy', 'democracy', 'legacy', 'literacy',
+		'anxiety', 'variety', 'society', 'reality', 'quality', 'ability',
+		'activity', 'identity', 'authority', 'community', 'opportunity',
+		'security', 'majority', 'minority', 'priority', 'celebrity',
+		'creativity', 'electricity', 'university', 'personality', 'responsibility',
+		'addiction', 'tradition', 'religion', 'decision', 'vision', 'mission',
+		'fashion', 'passion', 'expression', 'impression', 'depression',
+		'attention', 'intention', 'invention', 'prevention', 'convention',
+		'education', 'situation', 'information', 'communication', 'organization',
+		'celebration', 'imagination', 'generation', 'population', 'reputation',
+		'motivation', 'destination', 'examination', 'explanation', 'expectation',
+		'movement', 'government', 'environment', 'entertainment', 'development',
+		'agreement', 'treatment', 'statement', 'management', 'achievement',
+		'excitement', 'improvement', 'employment', 'equipment', 'experiment',
+		'behavior', 'neighbor', 'favor', 'flavor', 'honor', 'humor', 'color',
+		'failure', 'feature', 'creature', 'temperature', 'furniture', 'signature',
+		'literature', 'architecture', 'agriculture', 'manufacture', 'departure',
+		'survival', 'arrival', 'approval', 'removal', 'proposal', 'disposal',
+		'betrayal', 'denial', 'trial', 'burial', 'material', 'memorial'
+	];
+
+	// Check if word matches any easy hard word pattern
+	for (const easyWord of easyHardWords) {
+		if (lowerWord === easyWord || lowerWord.includes(easyWord)) {
+			return min + Math.floor(Math.random() * 7); // 26-32 points
+		}
+	}
+
+	// === WORD LENGTH SCORING ===
+	// Shorter words (under 10 chars) are often easier to describe
+	if (lowerWord.length <= 8) {
+		score += 0; // Keep at base
+	} else if (lowerWord.length <= 11) {
+		score += 3; // Slightly harder
+	} else if (lowerWord.length <= 14) {
+		score += 6; // Medium-hard
+	} else if (lowerWord.length <= 17) {
+		score += 10; // Hard
+	} else {
+		score += 14; // Very hard (long words)
+	}
+
+	// === ABSTRACT SUFFIX SCORING ===
+	// Very abstract/philosophical suffixes (hardest to describe)
+	const veryHardSuffixes = [
+		'ism', 'ization', 'ification', 'ousness', 'escence', 'itude',
+		'acity', 'icity', 'uality', 'ility', 'osity', 'iety'
+	];
+
+	// Moderately hard suffixes
+	const hardSuffixes = [
+		'tion', 'sion', 'ness', 'ment', 'ance', 'ence', 'ity', 'acy', 'ery'
+	];
+
+	// Check suffixes
+	for (const suffix of veryHardSuffixes) {
+		if (lowerWord.endsWith(suffix)) {
+			score += 8;
+			break;
+		}
+	}
+
+	for (const suffix of hardSuffixes) {
+		if (lowerWord.endsWith(suffix)) {
+			score += 4;
+			break;
+		}
+	}
+
+	// === ABSTRACT PREFIX SCORING ===
+	const abstractPrefixes = [
+		'meta', 'pseudo', 'quasi', 'neo', 'anti', 'counter', 'trans', 'ultra',
+		'hyper', 'super', 'multi', 'poly', 'omni', 'pan', 'proto', 'para'
+	];
+
+	for (const prefix of abstractPrefixes) {
+		if (lowerWord.startsWith(prefix)) {
+			score += 4;
+			break;
+		}
+	}
+
+	// === VERY ABSTRACT CONCEPTS (highest points) ===
+	const veryAbstractWords = [
+		'epistemology', 'ontology', 'phenomenology', 'metaphysics', 'hermeneutics',
+		'dialectic', 'eschatology', 'teleology', 'axiology', 'deontology',
+		'solipsism', 'nihilism', 'existentialism', 'determinism', 'relativism',
+		'empiricism', 'rationalism', 'pragmatism', 'positivism', 'structuralism',
+		'postmodernism', 'deconstruction', 'reductionism', 'materialism', 'idealism',
+		'hegemony', 'paradigm', 'zeitgeist', 'praxis', 'gestalt', 'ethos', 'pathos',
+		'hubris', 'catharsis', 'mimesis', 'anagnorisis', 'peripeteia',
+		'verisimilitude', 'simulacrum', 'simulacra', 'hyperreality',
+		'commodification', 'reification', 'alienation', 'objectification',
+		'interpellation', 'subjectification', 'deterritorialization',
+		'rhizome', 'assemblage', 'immanence', 'transcendence', 'haecceity',
+		'quiddity', 'aseity', 'ipseity', 'alterity', 'aporia', 'differance',
+		'apotheosis', 'sublimation', 'cathexis', 'transference', 'jouissance'
+	];
+
+	for (const abstractWord of veryAbstractWords) {
+		if (lowerWord === abstractWord) {
+			return max - Math.floor(Math.random() * 5); // 46-50 points
+		}
+	}
+
+	// Add small random variance (0-3 points)
+	score += Math.floor(Math.random() * 4);
+
+	// Clamp to valid range
+	return Math.min(max, Math.max(min, score));
+}
+
 // Build word database from unified source
 let wordDatabase = [];
 
@@ -75,7 +211,14 @@ if (wordDatabaseJSON) {
 		const range = pointRanges[difficulty];
 
 		words.forEach(word => {
-			const points = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+			let points;
+			if (difficulty === 'hard') {
+				// Use smart scoring for hard words
+				points = getHardWordPoints(word, range.min, range.max);
+			} else {
+				// Random points for easy and medium
+				points = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+			}
 			wordDatabase.push({
 				word: word.toUpperCase(),
 				difficulty,
