@@ -269,11 +269,10 @@ function updateLobby() {
 		playerDiv.className = "player-item";
 		playerDiv.innerHTML = `
             <div class="player-avatar-small">${player.name
-							.charAt(0)
-							.toUpperCase()}</div>
-            <span>${player.name}${
-			player.id === socket.id ? " (You)" : ""
-		}</span>
+				.charAt(0)
+				.toUpperCase()}</div>
+            <span>${player.name}${player.id === socket.id ? " (You)" : ""
+			}</span>
         `;
 
 		if (player.team === 0) {
@@ -370,8 +369,69 @@ function startTurn() {
 }
 
 function selectWords(count) {
-	const shuffled = [...wordDatabase].sort(() => Math.random() - 0.5);
-	return shuffled.slice(0, count);
+	// WORD DISTRIBUTION: Dynamic per round for variety
+	// Distribution patterns (all sum to 10 for a 10-word turn)
+	const DISTRIBUTION_PATTERNS = [
+		{ easy: 4, medium: 4, hard: 2 },  // Balanced (standard)
+		{ easy: 5, medium: 3, hard: 2 },  // Easier round
+		{ easy: 3, medium: 5, hard: 2 },  // Medium-heavy
+		{ easy: 3, medium: 4, hard: 3 },  // Harder round
+		{ easy: 4, medium: 3, hard: 3 },  // Hard-leaning
+		{ easy: 5, medium: 4, hard: 1 },  // Very easy round
+		{ easy: 2, medium: 5, hard: 3 },  // Challenge round
+		{ easy: 4, medium: 5, hard: 1 },  // Medium-focused
+		{ easy: 3, medium: 3, hard: 4 },  // Hard round
+		{ easy: 6, medium: 3, hard: 1 },  // Breather round
+	];
+
+	// Shuffle function
+	const shuffle = (arr) => {
+		const shuffled = [...arr];
+		for (let i = shuffled.length - 1; i > 0; i--) {
+			const j = Math.floor(Math.random() * (i + 1));
+			[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+		}
+		return shuffled;
+	};
+
+	// Group words by difficulty
+	const easyWords = shuffle(wordDatabase.filter(w => w.difficulty === 'easy'));
+	const mediumWords = shuffle(wordDatabase.filter(w => w.difficulty === 'medium'));
+	const hardWords = shuffle(wordDatabase.filter(w => w.difficulty === 'hard'));
+
+	// Select a random distribution pattern for variety
+	const pattern = DISTRIBUTION_PATTERNS[Math.floor(Math.random() * DISTRIBUTION_PATTERNS.length)];
+
+	// Scale pattern if count differs from 10
+	let distribution;
+	if (count !== 10) {
+		const scale = count / 10;
+		distribution = {
+			easy: Math.round(pattern.easy * scale),
+			medium: Math.round(pattern.medium * scale),
+			hard: Math.max(1, count - Math.round(pattern.easy * scale) - Math.round(pattern.medium * scale))
+		};
+	} else {
+		distribution = { ...pattern };
+	}
+
+	// Select words from each difficulty
+	const selectedWords = [
+		...easyWords.slice(0, Math.min(distribution.easy, easyWords.length)),
+		...mediumWords.slice(0, Math.min(distribution.medium, mediumWords.length)),
+		...hardWords.slice(0, Math.min(distribution.hard, hardWords.length))
+	];
+
+	// Fill remaining if needed
+	const remaining = count - selectedWords.length;
+	if (remaining > 0) {
+		const allOthers = shuffle([...easyWords, ...mediumWords, ...hardWords]
+			.filter(w => !selectedWords.includes(w)));
+		selectedWords.push(...allOthers.slice(0, remaining));
+	}
+
+	// Shuffle the words so they're not always in difficulty order
+	return shuffle(selectedWords);
 }
 
 function renderWordGrid() {
@@ -650,15 +710,15 @@ function updateContributions() {
 		div.innerHTML = `
             <div class="player-info-row">
                 <div class="player-avatar-med">${player
-									.charAt(0)
-									.toUpperCase()}</div>
+				.charAt(0)
+				.toUpperCase()}</div>
                 <div class="player-name-text">${player}</div>
             </div>
             <div class="player-score">(${contrib.points} points)</div>
             <div class="word-tags">
                 ${contrib.words
-									.map((w) => `<span class="word-tag">${w}</span>`)
-									.join("")}
+				.map((w) => `<span class="word-tag">${w}</span>`)
+				.join("")}
             </div>
         `;
 		container.appendChild(div);

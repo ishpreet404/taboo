@@ -1,6 +1,6 @@
 'use client'
 
-import { wordDatabase } from '@/lib/wordDatabase'
+import { generateRoundDistribution, wordDatabase } from '@/lib/wordDatabase'
 import { Clock, Copy, Lock, LogOut, Settings, Shield, Shuffle, SkipForward, Trophy, Unlock, UserCheck, Users, UserX, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
@@ -622,8 +622,12 @@ export default function GameScreen() {
     return shuffled
   }
 
+  // WORD DISTRIBUTION: Dynamic per round for variety
+  // Average target: 35% easy, 40% medium, 25% hard but varies each round
+  // Both teams get same distribution per round for fairness
+
   const selectWords = (count: number, ensureHardWords: boolean = false) => {
-    // Get indices of words we haven't used yet
+    // Get indices of words we haven't used yet, grouped by difficulty
     let availableIndices = wordDatabase
       .map((_, index) => index)
       .filter(index => !usedWordIndices.has(index))
@@ -632,57 +636,46 @@ export default function GameScreen() {
     if (availableIndices.length < wordDatabase.length * 0.2) {
       const newSet = new Set<number>()
       setUsedWordIndices(newSet)
-      // Recalculate available indices with empty set
       availableIndices = wordDatabase.map((_, index) => index)
     }
 
+    // Group available words by difficulty
+    const easyIndices = shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'easy'))
+    const mediumIndices = shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'medium'))
+    const hardIndices = shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'hard'))
+
     let selectedWords: any[] = []
+    const allSelectedIndices: number[] = []
 
-    // If we need to ensure hard words (for initial round setup)
-    if (ensureHardWords) {
-      // Get hard words - only 2 per turn
-      const hardWordIndices = availableIndices.filter(index =>
-        wordDatabase[index].difficulty === 'hard'
-      )
-      const shuffledHardIndices = shuffleArray(hardWordIndices)
-      const selectedHardIndices = shuffledHardIndices.slice(0, Math.min(2, hardWordIndices.length))
+    // Use dynamic distribution for variety (changes each round)
+    const distribution = generateRoundDistribution(count)
 
-      // Get remaining words
-      const remainingIndices = availableIndices.filter(index =>
-        !selectedHardIndices.includes(index)
-      )
-      const shuffledRemainingIndices = shuffleArray(remainingIndices)
-      const selectedRemainingIndices = shuffledRemainingIndices.slice(0, count - selectedHardIndices.length)
+    // Select from each difficulty pool
+    const selectedEasy = easyIndices.slice(0, Math.min(distribution.easy, easyIndices.length))
+    const selectedMedium = mediumIndices.slice(0, Math.min(distribution.medium, mediumIndices.length))
+    const selectedHard = hardIndices.slice(0, Math.min(distribution.hard, hardIndices.length))
 
-      // Combine
-      const allSelectedIndices = [...selectedHardIndices, ...selectedRemainingIndices]
-      selectedWords = allSelectedIndices.map(index => wordDatabase[index])
+    allSelectedIndices.push(...selectedEasy, ...selectedMedium, ...selectedHard)
 
-      // Mark as used
-      setUsedWordIndices(prev => {
-        const newSet = new Set(prev)
-        allSelectedIndices.forEach(index => newSet.add(index))
-        return newSet
-      })
-    } else {
-      // Regular selection without hard word requirement
-      const shuffledIndices = shuffleArray(availableIndices)
-      const selectedIndices = shuffledIndices.slice(0, Math.min(count, shuffledIndices.length))
-      selectedWords = selectedIndices.map(index => wordDatabase[index])
-
-      // Mark as used
-      setUsedWordIndices(prev => {
-        const newSet = new Set(prev)
-        selectedIndices.forEach(index => newSet.add(index))
-        return newSet
-      })
+    // If we still need more words (pool exhausted for a difficulty), fill from others
+    const remaining = count - allSelectedIndices.length
+    if (remaining > 0) {
+      const unusedIndices = availableIndices.filter(i => !allSelectedIndices.includes(i))
+      const shuffledRemaining = shuffleArray(unusedIndices)
+      allSelectedIndices.push(...shuffledRemaining.slice(0, remaining))
     }
 
-    // Sort by difficulty for better gameplay (easy to hard)
-    return selectedWords.sort((a, b) => {
-      const difficultyOrder: { [key: string]: number } = { easy: 0, medium: 1, hard: 2 }
-      return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty]
+    selectedWords = allSelectedIndices.map(index => wordDatabase[index])
+
+    // Mark as used
+    setUsedWordIndices(prev => {
+      const newSet = new Set(prev)
+      allSelectedIndices.forEach(index => newSet.add(index))
+      return newSet
     })
+
+    // Shuffle the words so easy/medium/hard aren't always in same order
+    return shuffleArray(selectedWords)
   }
 
   const startTurn = () => {
