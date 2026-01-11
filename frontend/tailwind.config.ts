@@ -6,6 +6,13 @@ const config: Config = {
     './components/**/*.{js,ts,jsx,tsx,mdx}',
     './app/**/*.{js,ts,jsx,tsx,mdx}',
   ],
+  safelist: [
+    // Team colors for dynamic team support
+    'text-blue-400', 'text-red-400', 'text-green-400', 'text-blue-300', 'text-red-300', 'text-green-300',
+    'bg-blue-500', 'bg-red-500', 'bg-green-500', 'bg-blue-500/10', 'bg-red-500/10', 'bg-green-500/10',
+    'border-blue-500/20', 'border-red-500/20', 'border-green-500/20',
+    'border-blue-500/30', 'border-red-500/30', 'border-green-500/30',
+  ],
   theme: {
     extend: {
       colors: {

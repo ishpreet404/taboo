@@ -26,6 +26,7 @@ interface Team {
 
 interface GameState {
   teams: Team[]
+  teamCount: number
   currentTeamIndex: number
   currentDescriberIndex: number[]
   round: number
@@ -36,6 +37,10 @@ interface GameState {
   guessedWords: WordObject[]
   skippedWords: WordObject[]
   playerContributions: Record<string, { points: number; guessedWords?: string[]; describedWords?: string[]; words?: string[] }>
+  coAdmins?: string[] // List of co-admin player names
+  tabooReporting?: boolean // Enable taboo reporting feature
+  tabooVoting?: boolean // Enable taboo voting feature
+  confirmedTaboosByTeam?: Record<number, number> // Track taboo point deductions per team
 }
 
 interface Notification {
@@ -48,6 +53,8 @@ interface GameContextType {
   roomCode: string | null
   playerName: string | null
   isHost: boolean
+  isAdmin: boolean // true if host or co-admin
+  isReconnecting: boolean // true while attempting to reconnect to a session
   myTeam: number | null
   currentScreen: 'room' | 'lobby' | 'game' | 'gameover'
   players: Player[]
@@ -55,12 +62,16 @@ interface GameContextType {
   connected: boolean
   notification: Notification | null
   teamSwitchingLocked: boolean
+  lobbyTeamCount: number
+  tabooReporting: boolean
+  tabooVoting: boolean
+  setTabooSettings: (reporting: boolean, voting: boolean) => void
   setNotification: (notification: Notification | null) => void
   setPlayerName: (name: string) => void
   createRoom: (name: string) => void
   joinRoom: (code: string, name: string) => void
   joinTeam: (teamIndex: number) => void
-  startGame: () => void
+  startGame: (teamCount?: number) => void
   leaveGame: () => void
   setCurrentScreen: (screen: 'room' | 'lobby' | 'game' | 'gameover') => void
 }
@@ -73,18 +84,24 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [roomCode, setRoomCode] = useState<string | null>(null)
   const [playerName, setPlayerName] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(false) // true if host or co-admin
   const [myTeam, setMyTeam] = useState<number | null>(null)
   const [currentScreen, setCurrentScreen] = useState<'room' | 'lobby' | 'game' | 'gameover'>('room')
+  const [isReconnecting, setIsReconnecting] = useState(false) // Show loading during reconnection
   const [players, setPlayers] = useState<Player[]>([])
   const [teamSwitchingLocked, setTeamSwitchingLocked] = useState(false)
   const [midTurnJoinData, setMidTurnJoinData] = useState<any>(null)
   const [notification, setNotification] = useState<Notification | null>(null)
+  const [lobbyTeamCount, setLobbyTeamCount] = useState(2) // Track team count in lobby
+  const [tabooReporting, setTabooReporting] = useState(false) // Taboo reporting off by default
+  const [tabooVoting, setTabooVoting] = useState(false) // Taboo voting off by default
   const wasKicked = useRef(false)
   const [gameState, setGameState] = useState<GameState>({
     teams: [
       { name: 'Team 1', players: [], score: 0 },
       { name: 'Team 2', players: [], score: 0 }
     ],
+    teamCount: 2,
     currentTeamIndex: 0,
     currentDescriberIndex: [0, 0],
     round: 1,
@@ -129,6 +146,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000'
     console.log('Connecting to server:', serverUrl)
 
+    // Generate or retrieve session ID
+    let sessionId = localStorage.getItem('taboo_session_id')
+    if (!sessionId) {
+      sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      localStorage.setItem('taboo_session_id', sessionId)
+    }
+
     const newSocket = io(serverUrl, {
       transports: ['websocket', 'polling'],
       reconnection: true,
@@ -138,9 +162,30 @@ export function GameProvider({ children }: { children: ReactNode }) {
       forceNew: true, // Force new connection each time
     })
 
+    // Check if there's a stored session before connecting
+    const storedRoomCode = localStorage.getItem('taboo_room_code')
+    const storedPlayerName = localStorage.getItem('taboo_player_name')
+    const storedSessionId = localStorage.getItem('taboo_session_id')
+    const hasStoredSession = storedRoomCode && storedPlayerName && storedSessionId
+
+    // If there's a stored session, show reconnecting state
+    if (hasStoredSession) {
+      setIsReconnecting(true)
+    }
+
     newSocket.on('connect', () => {
-      console.log('Connected to server')
+      console.log('✅ Connected to server, Socket ID:', newSocket.id)
       setConnected(true)
+
+      // Attempt auto-reconnect if we have stored session
+      if (hasStoredSession) {
+        console.log('🔄 Attempting to reconnect to room:', storedRoomCode)
+        newSocket.emit('reconnect-session', {
+          roomCode: storedRoomCode,
+          playerName: storedPlayerName,
+          sessionId: storedSessionId
+        })
+      }
     })
 
     newSocket.on('disconnect', () => {
@@ -148,11 +193,89 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setConnected(false)
     })
 
-    newSocket.on('room-created', (data) => {
+    // Handle successful reconnection
+    newSocket.on('reconnect-success', (data) => {
+      console.log('✅ Reconnected to room:', data.roomCode)
       wasKicked.current = false
       setRoomCode(data.roomCode)
       setPlayers(data.room.players)
+      setIsHost(data.isHost)
+      setIsAdmin(data.isHost || data.isCoAdmin)
+      setPlayerName(data.playerName)
+      setIsReconnecting(false) // Clear reconnecting state
+
+      // Restore team
+      const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
+      if (currentPlayer) {
+        setMyTeam(currentPlayer.team)
+      }
+
+      // Restore taboo settings
+      if (data.tabooReporting !== undefined) {
+        setTabooReporting(data.tabooReporting)
+      }
+      if (data.tabooVoting !== undefined) {
+        setTabooVoting(data.tabooVoting)
+      }
+
+      // Restore game state
+      if (data.gameState) {
+        setGameState(data.gameState)
+        setLobbyTeamCount(data.gameState.teamCount || 2)
+        setCurrentScreen(data.room.started ? 'game' : 'lobby')
+
+        // Dispatch custom event with full reconnection data for GameScreen (if game is started)
+        if (data.room.started) {
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('session-reconnected', {
+              detail: {
+                roundHistory: data.roundHistory || [],
+                gameState: data.gameState,
+                tabooReporting: data.tabooReporting,
+                tabooVoting: data.tabooVoting,
+                turnInProgress: data.gameState?.turnActive && data.gameState?.currentWords?.length > 0,
+                currentWords: data.gameState?.currentWords || [],
+                timeRemaining: data.gameState?.timeRemaining,
+                currentTurnGuessedWords: data.gameState?.currentTurnGuessedWords || [],
+                currentTurnWrongGuesses: data.gameState?.currentTurnWrongGuesses || [],
+                guessedByPlayer: data.gameState?.guessedByPlayer || [],
+              }
+            }))
+          }, 100)
+        }
+      } else {
+        setCurrentScreen('lobby')
+      }
+
+      setNotification({ message: 'Reconnected to game!', type: 'success' })
+      setTimeout(() => setNotification(null), 3000)
+    })
+
+    // Handle failed reconnection (room no longer exists)
+    newSocket.on('reconnect-failed', (data) => {
+      console.log('❌ Reconnection failed:', data.message)
+      // Clear stored session
+      localStorage.removeItem('taboo_room_code')
+      localStorage.removeItem('taboo_player_name')
+      setIsReconnecting(false) // Clear reconnecting state
+      setNotification({ message: data.message || 'Could not reconnect to room', type: 'warning' })
+      setTimeout(() => setNotification(null), 4000)
+    })
+
+    newSocket.on('room-created', (data) => {
+      wasKicked.current = false
+      console.log(`📦 Room created! Room: ${data.roomCode}, Socket ID: ${newSocket.id}`)
+      setRoomCode(data.roomCode)
+      setPlayers(data.room.players)
       setIsHost(true)
+      setIsAdmin(true) // Host is always admin
+      // Save session info
+      localStorage.setItem('taboo_room_code', data.roomCode)
+      if (playerName) localStorage.setItem('taboo_player_name', playerName)
+      // Set initial team count from room
+      if (data.room.teamCount) {
+        setLobbyTeamCount(data.room.teamCount)
+      }
       // Find this player's team assignment
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
@@ -163,8 +286,25 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     newSocket.on('room-joined', (data) => {
       wasKicked.current = false
+      console.log(`📦 Joined room! Room: ${data.roomCode}, Socket ID: ${newSocket.id}`)
       setRoomCode(data.roomCode)
       setPlayers(data.room.players)
+      setIsHost(false) // Joining player is not the host
+      setIsAdmin(data.isCoAdmin || false) // Check if rejoining as co-admin
+      // Save session info
+      localStorage.setItem('taboo_room_code', data.roomCode)
+      if (playerName) localStorage.setItem('taboo_player_name', playerName)
+      // Set lobby team count from server
+      if (data.teamCount) {
+        setLobbyTeamCount(data.teamCount)
+      }
+      // Set taboo settings from server
+      if (data.tabooReporting !== undefined) {
+        setTabooReporting(data.tabooReporting)
+      }
+      if (data.tabooVoting !== undefined) {
+        setTabooVoting(data.tabooVoting)
+      }
       // Find this player's team assignment
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
@@ -177,12 +317,24 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setRoomCode(data.roomCode)
       setPlayers(data.room.players)
       setGameState(data.gameState)
+      setIsHost(false)
+      setIsAdmin(data.isCoAdmin || false) // Check if rejoining as co-admin
+      // Save session info
+      localStorage.setItem('taboo_room_code', data.roomCode)
+      if (playerName) localStorage.setItem('taboo_player_name', playerName)
+      // Set team count from game state or data
+      if (data.teamCount) {
+        setLobbyTeamCount(data.teamCount)
+      } else if (data.gameState?.teamCount) {
+        setLobbyTeamCount(data.gameState.teamCount)
+      }
       setCurrentScreen('lobby') // Show lobby so they can pick a team
       setNotification({ message: 'Game is in progress! Please join a team to participate.', type: 'info' })
       setTimeout(() => setNotification(null), 4000)
     })
 
     newSocket.on('room-rejoined', (data) => {
+      console.log('[ROOM-REJOINED] Full data received:', data)
       setRoomCode(data.roomCode)
       setPlayers(data.room.players)
       setGameState(data.gameState)
@@ -191,13 +343,54 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (player) {
         setMyTeam(player.team)
       }
+      // Sync taboo settings
+      if (data.tabooReporting !== undefined) {
+        setTabooReporting(data.tabooReporting)
+      }
+      if (data.tabooVoting !== undefined) {
+        setTabooVoting(data.tabooVoting)
+      }
       setCurrentScreen('game')
       setNotification({ message: 'Reconnected to game!', type: 'success' })
       setTimeout(() => setNotification(null), 3000)
+
+      // Dispatch custom event with full reconnection data for GameScreen
+      // Use setTimeout to ensure GameScreen has mounted first
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('session-reconnected', {
+          detail: {
+            roundHistory: data.roundHistory || [],
+            gameState: data.gameState,
+            tabooReporting: data.tabooReporting,
+            tabooVoting: data.tabooVoting,
+            turnInProgress: data.gameState?.turnActive && data.gameState?.currentWords?.length > 0,
+            currentWords: data.gameState?.currentWords || [],
+            timeRemaining: data.gameState?.timeRemaining,
+            currentTurnGuessedWords: data.gameState?.currentTurnGuessedWords || [],
+            currentTurnWrongGuesses: data.gameState?.currentTurnWrongGuesses || [],
+            guessedByPlayer: data.gameState?.guessedByPlayer || [],
+          }
+        }))
+      }, 100)
     })
 
     newSocket.on('player-joined', (data) => {
       setPlayers(data.room.players)
+      // Sync team count for existing players when someone new joins
+      if (data.teamCount) {
+        setLobbyTeamCount(data.teamCount)
+      }
+    })
+
+    newSocket.on('team-count-changed', (data) => {
+      console.log('team-count-changed received:', data.teamCount)
+      setLobbyTeamCount(data.teamCount)
+    })
+
+    newSocket.on('taboo-settings-changed', (data) => {
+      console.log('taboo-settings-changed received:', data)
+      setTabooReporting(data.tabooReporting)
+      setTabooVoting(data.tabooVoting)
     })
 
     newSocket.on('player-joined-midgame', (data) => {
@@ -235,17 +428,33 @@ export function GameProvider({ children }: { children: ReactNode }) {
     })
 
     newSocket.on('team-updated', (data) => {
+      console.log('🔄 team-updated event received:', data)
       setPlayers(data.room.players)
       // Update myTeam based on current player's team assignment from server
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
         setMyTeam(currentPlayer.team)
       }
+      // Show notification if provided
+      if (data.message) {
+        console.log('Setting notification:', data.message)
+        setNotification({ message: data.message, type: 'info' })
+        setTimeout(() => setNotification(null), 3000)
+      }
     })
 
     newSocket.on('team-updated-midgame', (data) => {
+      console.log('🔄 team-updated-midgame event received:', data)
       setPlayers(data.room.players)
       setGameState(data.gameState)
+
+      // Show notification if provided (for team randomization)
+      if (data.message) {
+        console.log('Setting notification:', data.message)
+        setNotification({ message: data.message, type: 'info' })
+        setTimeout(() => setNotification(null), 3000)
+      }
+
       // If this is the player who just joined
       const player = data.room.players.find((p: any) => p.id === newSocket.id)
       if (player && player.name === data.joinedPlayer) {
@@ -276,8 +485,35 @@ export function GameProvider({ children }: { children: ReactNode }) {
     })
 
     newSocket.on('game-started', (data) => {
+      console.log(`🎮 Game started! Socket ID: ${newSocket.id}`)
       setGameState(data.gameState)
       setCurrentScreen('game')
+    })
+
+    newSocket.on('third-team-added', (data) => {
+      console.log('🟢 third-team-added event received:', data)
+      setGameState(data.gameState)
+      setLobbyTeamCount(3)
+      if (data.room) {
+        setPlayers(data.room.players)
+      }
+      // Don't set notification here - let the game-state-updated handler do it
+      // or handle notification display in the component that needs it
+    })
+
+    newSocket.on('third-team-removed', (data) => {
+      console.log('🔴 third-team-removed event received:', data)
+      setGameState(data.gameState)
+      setLobbyTeamCount(2)
+      setPlayers(data.room.players)
+      // Update myTeam if I was on Team 3
+      const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
+      if (currentPlayer) {
+        console.log('Updating myTeam from', myTeam, 'to', currentPlayer.team)
+        setMyTeam(currentPlayer.team)
+      }
+      // Don't set notification here - let the game-state-updated handler do it
+      // or handle notification display in the component that needs it
     })
 
     newSocket.on('game-state-updated', (data) => {
@@ -313,6 +549,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
     })
 
     newSocket.on('game-over', (data) => {
+      console.log('[GAME-OVER] Received data:', data)
+      console.log('[GAME-OVER] confirmedTaboosByTeam:', data.gameState?.confirmedTaboosByTeam)
       // Only show game over screen if player wasn't kicked
       if (!wasKicked.current) {
         setGameState(data.gameState)
@@ -327,7 +565,25 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setRoomCode(null)
       setPlayers([])
       setIsHost(false)
+      setIsAdmin(false)
       setMyTeam(null)
+      // Clear session data
+      localStorage.removeItem('taboo_room_code')
+      localStorage.removeItem('taboo_player_name')
+    })
+
+    // Listen for co-admin promotion
+    newSocket.on('made-co-admin', (data) => {
+      setIsAdmin(true)
+      setNotification({ message: data.message || 'You are now a co-admin!', type: 'success' })
+      setTimeout(() => setNotification(null), 4000)
+    })
+
+    // Listen for co-admin demotion
+    newSocket.on('removed-co-admin', (data) => {
+      setIsAdmin(false)
+      setNotification({ message: data.message || 'You are no longer a co-admin.', type: 'info' })
+      setTimeout(() => setNotification(null), 4000)
     })
 
     newSocket.on('player-kicked', (data) => {
@@ -345,7 +601,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setRoomCode(null)
       setPlayers([])
       setIsHost(false)
+      setIsAdmin(false)
       setMyTeam(null)
+      // Reset taboo toggles to default (off)
+      setTabooReporting(false)
+      setTabooVoting(false)
+      // Clear session data
+      localStorage.removeItem('taboo_room_code')
+      localStorage.removeItem('taboo_player_name')
     })
 
     newSocket.on('you-left-game', (data) => {
@@ -355,7 +618,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setRoomCode(null)
       setPlayers([])
       setIsHost(false)
+      setIsAdmin(false)
       setMyTeam(null)
+      // Reset taboo toggles to default (off)
+      setTabooReporting(false)
+      setTabooVoting(false)
+      // Clear session data
+      localStorage.removeItem('taboo_room_code')
+      localStorage.removeItem('taboo_player_name')
     })
 
     newSocket.on('team-switching-locked', (data) => {
@@ -385,12 +655,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     setSocket(newSocket)
 
-    // Handle tab/window close - ensure socket disconnects
+    // Handle tab/window close - DON'T emit leave-game, let grace period handle reconnection
     const handleBeforeUnload = () => {
-      if (newSocket && roomCode) {
-        newSocket.emit('leave-game', { roomCode })
-        newSocket.disconnect()
-      }
+      // Don't emit leave-game here - allow reconnection via grace period
+      // The socket will disconnect naturally and the server will wait before removing player
     }
 
     // Handle page visibility change (tab switch, minimize, etc.)
@@ -407,21 +675,21 @@ export function GameProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      if (roomCode) {
-        newSocket.emit('leave-game', { roomCode })
-      }
+      // Don't emit leave-game on cleanup - allow reconnection
       newSocket.close()
     }
   }, [])
 
   const createRoom = (name: string) => {
     setPlayerName(name)
-    socket?.emit('create-room', { playerName: name })
+    localStorage.setItem('taboo_player_name', name)
+    socket?.emit('create-room', { playerName: name, sessionId: localStorage.getItem('taboo_session_id') })
   }
 
   const joinRoom = (code: string, name: string) => {
     setPlayerName(name)
-    socket?.emit('join-room', { roomCode: code, playerName: name })
+    localStorage.setItem('taboo_player_name', name)
+    socket?.emit('join-room', { roomCode: code, playerName: name, sessionId: localStorage.getItem('taboo_session_id') })
   }
 
   const joinTeam = (teamIndex: number) => {
@@ -429,17 +697,24 @@ export function GameProvider({ children }: { children: ReactNode }) {
     socket?.emit('join-team', { roomCode, teamIndex })
   }
 
-  const startGame = () => {
+  const startGame = (teamCount: number = 2) => {
     if (!isHost) return
+
+    // Build teams array based on teamCount
+    const teams: Array<{ name: string; players: string[]; score: number }> = [
+      { name: 'Team 1', players: players.filter(p => p.team === 0).map(p => p.name), score: 0 },
+      { name: 'Team 2', players: players.filter(p => p.team === 1).map(p => p.name), score: 0 }
+    ];
+
+    if (teamCount === 3) {
+      teams.push({ name: 'Team 3', players: players.filter(p => p.team === 2).map(p => p.name), score: 0 });
+    }
 
     // Reset game state to initial values for a fresh game
     const newGameState: GameState = {
-      teams: [
-        { name: 'Team 1', players: players.filter(p => p.team === 0).map(p => p.name), score: 0 },
-        { name: 'Team 2', players: players.filter(p => p.team === 1).map(p => p.name), score: 0 }
-      ],
+      teams,
       currentTeamIndex: 0,
-      currentDescriberIndex: [0, 0],
+      currentDescriberIndex: teamCount === 3 ? [0, 0, 0] : [0, 0],
       round: 1,
       maxRounds: 12,
       turnTime: 60,
@@ -447,7 +722,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       currentWords: [],
       guessedWords: [],
       skippedWords: [],
-      playerContributions: {}
+      playerContributions: {},
+      teamCount
     }
 
     socket?.emit('start-game', { roomCode, gameState: newGameState })
@@ -455,8 +731,28 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const leaveGame = () => {
     socket?.emit('leave-game', { roomCode })
+    // Clear session data when explicitly leaving
+    localStorage.removeItem('taboo_room_code')
+    localStorage.removeItem('taboo_player_name')
     setMyTeam(null)
+    // Reset taboo toggles to default (off)
+    setTabooReporting(false)
+    setTabooVoting(false)
+    // Reset room state
+    setRoomCode(null)
+    setPlayers([])
+    setIsHost(false)
+    setIsAdmin(false)
     setCurrentScreen('room')
+  }
+
+  // Function to update taboo settings (host only)
+  const setTabooSettings = (reporting: boolean, voting: boolean) => {
+    console.log('[SET-TABOO-SETTINGS] Called with:', { reporting, voting, hasSocket: !!socket, roomCode })
+    if (socket && roomCode) {
+      console.log('[SET-TABOO-SETTINGS] Emitting set-taboo-settings event')
+      socket.emit('set-taboo-settings', { roomCode, tabooReporting: reporting, tabooVoting: voting })
+    }
   }
 
   return (
@@ -466,6 +762,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         roomCode,
         playerName,
         isHost,
+        isAdmin,
+        isReconnecting,
         myTeam,
         currentScreen,
         players,
@@ -473,6 +771,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
         connected,
         notification,
         teamSwitchingLocked,
+        lobbyTeamCount,
+        tabooReporting,
+        tabooVoting,
+        setTabooSettings,
         setNotification,
         setPlayerName,
         createRoom,

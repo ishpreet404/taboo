@@ -1,19 +1,47 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Home, Medal, Star, Trophy } from 'lucide-react'
+import { AlertTriangle, Home, Medal, Star, Trophy } from 'lucide-react'
 import { useGame } from './GameContext'
 
+interface PlayerContribution {
+  name: string
+  points: number
+  guessedWords?: string[]
+  describedWords?: string[]
+  tabooWords?: { word: string; points: number }[]
+  words?: string[]
+}
+
 export default function GameOverScreen() {
-  const { gameState, setCurrentScreen } = useGame()
+  const { gameState, setCurrentScreen, leaveGame } = useGame()
 
-  const team1 = gameState.teams[0]
-  const team2 = gameState.teams[1]
-  const winner = team1.score > team2.score ? team1 : team2.score > team1.score ? team2 : null
+  // Get taboo deductions per team
+  const tabooDeductionsByTeam = gameState.confirmedTaboosByTeam || {}
 
-  // Get top contributors
-  const contributions = Object.entries(gameState.playerContributions)
-    .map(([name, data]) => ({ name, ...data }))
+  // Debug logging
+  console.log('[GAME-OVER] gameState.confirmedTaboosByTeam:', gameState.confirmedTaboosByTeam)
+  console.log('[GAME-OVER] tabooDeductionsByTeam:', tabooDeductionsByTeam)
+
+  // Calculate effective scores (original - taboo deductions)
+  const teamsWithEffectiveScores = gameState.teams.map((team, index) => {
+    const tabooDeduction = tabooDeductionsByTeam[index] || 0
+    console.log(`[GAME-OVER] Team ${index} (${team.name}): score=${team.score}, tabooDeduction=${tabooDeduction}`)
+    return {
+      ...team,
+      originalIndex: index,
+      tabooDeduction: tabooDeduction,
+      effectiveScore: team.score - tabooDeduction
+    }
+  })
+
+  // Find winner by comparing effective scores
+  const sortedTeams = [...teamsWithEffectiveScores].sort((a, b) => b.effectiveScore - a.effectiveScore);
+  const winner = sortedTeams[0].effectiveScore > sortedTeams[1].effectiveScore ? sortedTeams[0] : null;
+
+  // Get all contributors sorted by points
+  const contributions: PlayerContribution[] = Object.entries(gameState.playerContributions)
+    .map(([name, data]: [string, any]) => ({ name, ...data }))
     .sort((a, b) => b.points - a.points)
 
   return (
@@ -37,7 +65,12 @@ export default function GameOverScreen() {
             <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-yellow-400 to-orange-500 bg-clip-text text-transparent">
               {winner.name} Wins!
             </h1>
-            <p className="text-2xl text-gray-300">{winner.score} Points</p>
+            <p className="text-2xl text-gray-300">{winner.effectiveScore} Points</p>
+            {winner.tabooDeduction > 0 && (
+              <p className="text-sm text-orange-400 mt-1">
+                ({winner.score} - {winner.tabooDeduction} taboo penalty)
+              </p>
+            )}
           </>
         ) : (
           <>
@@ -51,65 +84,73 @@ export default function GameOverScreen() {
             <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
               It's a Tie!
             </h1>
-            <p className="text-2xl text-gray-300">{team1.score} - {team2.score}</p>
+            <p className="text-2xl text-gray-300">
+              {sortedTeams.map(t => t.effectiveScore).join(' - ')}
+            </p>
           </>
         )}
       </motion.div>
 
       {/* Final Scores */}
-      <div className="grid md:grid-cols-2 gap-6 mb-12">
-        <motion.div
-          initial={{ x: -50, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className={`glass-strong rounded-2xl p-8 border-2 ${winner === team1 ? 'border-yellow-500 bg-yellow-500/10' : 'border-blue-500/30'
-            }`}
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold text-blue-400">{team1.name}</h2>
-            {winner === team1 && <Trophy className="w-8 h-8 text-yellow-400" />}
-          </div>
-          <div className="text-5xl font-bold mb-4">{team1.score}</div>
-          <div className="text-sm text-gray-400">points</div>
-          <div className="mt-4 space-y-2">
-            {team1.players.map((player) => (
-              <div key={player} className="glass rounded-lg p-2 flex items-center gap-2">
-                <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-sm font-bold">
-                  {player.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm">{player}</span>
-              </div>
-            ))}
-          </div>
-        </motion.div>
+      <div className={`grid ${gameState.teamCount === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-6 mb-12`}>
+        {sortedTeams.map((team, index) => {
+          const teamColors = ['blue', 'red', 'green'];
+          const teamColorName = teamColors[team.originalIndex];
+          const isWinner = winner === team;
 
-        <motion.div
-          initial={{ x: 50, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className={`glass-strong rounded-2xl p-8 border-2 ${winner === team2 ? 'border-yellow-500 bg-yellow-500/10' : 'border-red-500/30'
-            }`}
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold text-red-400">{team2.name}</h2>
-            {winner === team2 && <Trophy className="w-8 h-8 text-yellow-400" />}
-          </div>
-          <div className="text-5xl font-bold mb-4">{team2.score}</div>
-          <div className="text-sm text-gray-400">points</div>
-          <div className="mt-4 space-y-2">
-            {team2.players.map((player) => (
-              <div key={player} className="glass rounded-lg p-2 flex items-center gap-2">
-                <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center text-sm font-bold">
-                  {player.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm">{player}</span>
+          return (
+            <motion.div
+              key={team.name}
+              initial={{ x: index % 2 === 0 ? -50 : 50, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              transition={{ delay: 0.2 }}
+              className={`glass-strong rounded-2xl p-8 border-2 ${isWinner ? 'border-yellow-500 bg-yellow-500/10' : `border-${teamColorName}-500/30`
+                }`}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className={`text-2xl font-bold text-${teamColorName}-400`}>{team.name}</h2>
+                {isWinner && <Trophy className="w-8 h-8 text-yellow-400" />}
               </div>
-            ))}
-          </div>
-        </motion.div>
+
+              {/* Score Display - Always show both raw and final */}
+              <div className="flex items-end gap-4 mb-3">
+                <div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wide">Final Score</div>
+                  <div className="text-5xl font-bold text-white">{team.effectiveScore}</div>
+                </div>
+                <div className="pb-1">
+                  <div className="text-xs text-gray-500 uppercase tracking-wide">Raw</div>
+                  <div className={`text-2xl font-semibold ${team.tabooDeduction > 0 ? 'text-gray-400' : 'text-gray-300'}`}>
+                    {team.score}
+                  </div>
+                </div>
+              </div>
+
+              {/* Taboo Penalty */}
+              {team.tabooDeduction > 0 ? (
+                <div className="flex items-center gap-2 text-sm bg-orange-500/10 border border-orange-500/30 rounded-lg px-3 py-2 mb-4">
+                  <AlertTriangle className="w-4 h-4 text-orange-400" />
+                  <span className="text-orange-400">Taboo Penalty: -{team.tabooDeduction} pts</span>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500 mb-4">No taboo penalties</div>
+              )}
+              <div className="space-y-2">
+                {team.players.map((player) => (
+                  <div key={player} className="glass rounded-lg p-2 flex items-center gap-2">
+                    <div className={`w-8 h-8 bg-${teamColorName}-500 rounded-full flex items-center justify-center text-sm font-bold`}>
+                      {player.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="text-sm">{player}</span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          );
+        })}
       </div>
 
-      {/* Top Contributors */}
+      {/* All Player Stats */}
       <motion.div
         initial={{ y: 50, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -118,37 +159,57 @@ export default function GameOverScreen() {
       >
         <h2 className="text-2xl font-bold mb-6 flex items-center gap-3">
           <Star className="w-6 h-6 text-yellow-400" />
-          Top Contributors
+          Player Stats
         </h2>
         <div className="space-y-4">
-          {contributions.slice(0, 5).map((player, index) => (
-            <motion.div
-              key={player.name}
-              initial={{ x: -20, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              transition={{ delay: 0.5 + index * 0.1 }}
-              className="glass rounded-xl p-4 flex items-center justify-between"
-            >
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  {index === 0 && <Medal className="w-6 h-6 text-yellow-400" />}
-                  {index === 1 && <Medal className="w-6 h-6 text-gray-400" />}
-                  {index === 2 && <Medal className="w-6 h-6 text-orange-600" />}
-                  {index > 2 && <span className="w-6 text-center text-gray-400">#{index + 1}</span>}
-                </div>
-                <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-500 rounded-full flex items-center justify-center text-lg font-bold">
-                  {player.name.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <div className="font-semibold">{player.name}</div>
-                  <div className="text-sm text-gray-400">
-                    {(player.guessedWords?.length || player.words?.length || 0)} guessed | {player.describedWords?.length || 0} described
+          {contributions.map((player, index) => {
+            const tabooCount = player.tabooWords?.length || 0
+            const tabooPoints = player.tabooWords?.reduce((sum, t) => sum + t.points, 0) || 0
+
+            return (
+              <motion.div
+                key={player.name}
+                initial={{ x: -20, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                transition={{ delay: 0.5 + index * 0.05 }}
+                className="glass rounded-xl p-4 flex items-center justify-between"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    {index === 0 && <Medal className="w-6 h-6 text-yellow-400" />}
+                    {index === 1 && <Medal className="w-6 h-6 text-gray-400" />}
+                    {index === 2 && <Medal className="w-6 h-6 text-orange-600" />}
+                    {index > 2 && <span className="w-6 text-center text-gray-400">#{index + 1}</span>}
+                  </div>
+                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-500 rounded-full flex items-center justify-center text-lg font-bold">
+                    {player.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="font-semibold">{player.name}</div>
+                    <div className="text-sm text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
+                      <span className="text-green-400">
+                        {(player.guessedWords?.length || player.words?.length || 0)} guessed
+                      </span>
+                      <span className="text-blue-400">
+                        {player.describedWords?.length || 0} described
+                      </span>
+                      {tabooCount > 0 && (
+                        <span className="text-orange-400">
+                          {tabooCount} taboo{tabooCount !== 1 ? 's' : ''} ({tabooPoints}pts)
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="text-2xl font-bold text-yellow-400">{player.points}</div>
-            </motion.div>
-          ))}
+                <div className="text-2xl font-bold text-yellow-400">{player.points}</div>
+              </motion.div>
+            )
+          })}
+          {contributions.length === 0 && (
+            <div className="text-center text-gray-400 py-8">
+              No player stats available
+            </div>
+          )}
         </div>
       </motion.div>
 
@@ -160,7 +221,9 @@ export default function GameOverScreen() {
         className="text-center"
       >
         <button
-          onClick={() => setCurrentScreen('room')}
+          onClick={() => {
+            leaveGame()
+          }}
           className="px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform hover:scale-105 flex items-center gap-3 mx-auto"
         >
           <Home className="w-6 h-6" />
