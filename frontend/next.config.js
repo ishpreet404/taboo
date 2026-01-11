@@ -4,8 +4,8 @@ const path = require("path");
 const nextConfig = {
 	reactStrictMode: true,
 	output: "standalone",
-	// Explicitly set the project root to avoid lockfile detection issues
-	outputFileTracingRoot: path.join(__dirname, ".."),
+	// Explicitly set the project root to the frontend directory
+	outputFileTracingRoot: __dirname,
 	// Word database is server-only - no client-side access needed
 };
 
