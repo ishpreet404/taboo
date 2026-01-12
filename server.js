@@ -1602,6 +1602,12 @@ io.on("connection", (socket) => {
 
 			console.log(`[END-TURN] Room ${roomCode}: Starting ${GRACE_PERIOD_MS}ms grace period for last-second guesses`);
 
+			// Notify all players that grace period has started (for UI transition)
+			io.to(roomCode).emit("grace-period-start", {
+				duration: GRACE_PERIOD_MS,
+				message: "Finalizing results..."
+			});
+
 			// Delay the actual turn finalization
 			setTimeout(() => {
 				const roomAfterGrace = gameRooms.get(roomCode);
@@ -1649,9 +1655,28 @@ io.on("connection", (socket) => {
 				}
 
 				// Calculate final points from server's authoritative guessedByPlayer list
-				const serverGuessedWords = gsAfterGrace.currentTurnGuessedWords || [];
+				const serverGuessedWordStrings = gsAfterGrace.currentTurnGuessedWords || [];
 				const serverGuessedByPlayer = gsAfterGrace.guessedByPlayer || [];
 				const finalTotalPoints = serverGuessedByPlayer.reduce((sum, g) => sum + (g.points || 0), 0);
+
+				// Use server's currentWords if available, fallback to client's allWords
+				const allWordsSource = gsAfterGrace.currentWords?.length > 0 ? gsAfterGrace.currentWords : (allWords || []);
+
+				// Build full word objects for guessedWords (frontend expects objects with word, points, difficulty)
+				const serverGuessedWords = serverGuessedWordStrings.map(wordStr => {
+					// Find the full word object from allWords
+					const fullWordObj = allWordsSource.find(w => w.word === wordStr);
+					if (fullWordObj) {
+						return fullWordObj;
+					}
+					// Fallback: find from guessedByPlayer to get at least the points
+					const guessInfo = serverGuessedByPlayer.find(g => g.word === wordStr);
+					return {
+						word: wordStr,
+						points: guessInfo?.points || 0,
+						difficulty: 'medium' // Default difficulty if not found
+					};
+				});
 
 				// Broadcast the turn ended event with pending taboo info to ALL sockets in room
 				// Use server's authoritative data, not client-provided data
@@ -1661,7 +1686,7 @@ io.on("connection", (socket) => {
 					totalPoints: finalTotalPoints,
 					guessedWords: serverGuessedWords,
 					guessedByPlayer: serverGuessedByPlayer,
-					allWords: allWords || [],
+					allWords: allWordsSource,
 					gameState: gsAfterGrace,
 					pendingTabooWords: pendingTabooWords, // Include pending taboos in turn-ended event
 				});

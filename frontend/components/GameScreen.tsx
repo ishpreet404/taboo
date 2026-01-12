@@ -37,6 +37,7 @@ export default function GameScreen() {
   const [roundEndVotes, setRoundEndVotes] = useState<{ [word: string]: { yes: string[]; no: string[] } }>({}) // Yes/No votes for each pending word
   const [myRoundEndVotes, setMyRoundEndVotes] = useState<Map<string, 'yes' | 'no'>>(new Map()) // My vote for each word (yes = taboo, no = not taboo)
   const [votingTimeRemaining, setVotingTimeRemaining] = useState(30) // Countdown for voting
+  const [showGracePeriod, setShowGracePeriod] = useState(false) // Show grace period transition
 
   const currentTeam = gameState.teams[gameState.currentTeamIndex]
   const currentDescriberIndex = gameState.currentDescriberIndex?.[gameState.currentTeamIndex] ?? 0
@@ -107,15 +108,28 @@ export default function GameScreen() {
 
     const handleTurnEnded = (data: any) => {
       console.log('[TURN-ENDED] Received turn-ended event. Player:', playerName, 'pendingTabooWords:', data.pendingTabooWords, 'length:', data.pendingTabooWords?.length)
+      // Hide grace period overlay when turn ends
+      setShowGracePeriod(false)
       setTurnActive(false)
       setGamePhase('turn-end')
       // Store all words from this turn for display to everyone
       if (data.allWords) {
         setPreviousRoundWords(data.allWords)
       }
-      // Sync guessed words from the describer to all players - ensure we have valid data
+      // Sync guessed words from the server - normalize to ensure they are objects with word, points, difficulty
       if (data.guessedWords && Array.isArray(data.guessedWords)) {
-        setGuessedWords(data.guessedWords)
+        // Normalize guessedWords: handle both string arrays and object arrays
+        const normalizedGuessedWords = data.guessedWords.map((w: any) => {
+          if (typeof w === 'string') {
+            // If it's a string, find the full object from allWords or guessedByPlayer
+            const fullObj = data.allWords?.find((aw: any) => aw.word === w)
+            const guessInfo = data.guessedByPlayer?.find((g: any) => g.word === w)
+            return fullObj || { word: w, points: guessInfo?.points || 0, difficulty: 'medium' }
+          }
+          return w // Already an object
+        })
+        setGuessedWords(normalizedGuessedWords)
+        console.log('[TURN-ENDED] Normalized guessedWords:', normalizedGuessedWords)
       }
       // Ensure guessedByPlayer has valid data
       if (data.guessedByPlayer && Array.isArray(data.guessedByPlayer)) {
@@ -297,6 +311,11 @@ export default function GameScreen() {
       // Show notification when guess is rejected due to timing
       setNotification({ message: data.message || "Your guess arrived too late!", type: 'warning' })
       setTimeout(() => setNotification(null), 3000)
+    }
+
+    const handleGracePeriodStart = () => {
+      // Show grace period transition overlay
+      setShowGracePeriod(true)
     }
 
     const handleMadeCoAdmin = (data: any) => {
@@ -494,6 +513,7 @@ export default function GameScreen() {
     socket.on('word-guessed-sync', handleWordGuessed)
     socket.on('turn-started', handleTurnStarted)
     socket.on('turn-ended', handleTurnEnded)
+    socket.on('grace-period-start', handleGracePeriodStart)
     socket.on('next-turn-sync', handleNextTurn)
     socket.on('timer-sync', handleTimerSync)
     socket.on('host-left', handleHostLeft)
@@ -521,6 +541,7 @@ export default function GameScreen() {
       socket.off('word-guessed-sync', handleWordGuessed)
       socket.off('turn-started', handleTurnStarted)
       socket.off('turn-ended', handleTurnEnded)
+      socket.off('grace-period-start', handleGracePeriodStart)
       socket.off('next-turn-sync', handleNextTurn)
       socket.off('timer-sync', handleTimerSync)
       socket.off('host-left', handleHostLeft)
@@ -2048,6 +2069,26 @@ export default function GameScreen() {
                 <div className="text-center">
                   <div className="text-2xl font-bold text-purple-300 mb-1">🎉 Bonus Words!</div>
                   <div className="text-lg text-purple-200">+{bonusWordCount} extra words added!</div>
+                </div>
+              </div>
+            </div>
+          )
+        }
+
+        {/* Grace Period Transition Overlay */}
+        {
+          showGracePeriod && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+              <div className="glass-strong rounded-2xl p-8 border-2 border-blue-500/50 bg-blue-500/10 shadow-2xl text-center">
+                <div className="flex flex-col items-center gap-4">
+                  {/* Animated spinner */}
+                  <div className="relative">
+                    <div className="w-16 h-16 border-4 border-blue-500/30 border-t-blue-400 rounded-full animate-spin"></div>
+                    <Clock className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-6 h-6 text-blue-400" />
+                  </div>
+                  <div className="text-2xl font-bold text-blue-300">Time's Up!</div>
+                  <div className="text-lg text-gray-300">Finalizing results...</div>
+                  <div className="text-sm text-gray-400">Counting last-second guesses</div>
                 </div>
               </div>
             </div>
