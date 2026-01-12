@@ -1271,13 +1271,29 @@ io.on("connection", (socket) => {
 			const gs = room.gameState;
 
 			// Validate guess timing with grace period
-			const GRACE_PERIOD_MS = 3000; // 3 second grace period for network latency
+			// Allow guesses during grace period even if turnActive is false (for last-second guesses)
+			const GRACE_PERIOD_MS = 2000; // 2 second grace period for network latency
 			const turnDuration = (gs.turnTime || 60) * 1000; // Convert to milliseconds
+
+			// If turnStartTime is null and we're not in grace period, turn is fully over
+			if (!gs.turnStartTime && !gs.inGracePeriod) {
+				console.log(`Late guess rejected from ${guesser}: "${word}" - turn already fully ended`);
+				io.to(socket.id).emit("guess-rejected", {
+					message: "Time's up! Your guess arrived too late.",
+					word: word
+				});
+				return;
+			}
+
 			const elapsedTime = Date.now() - (gs.turnStartTime || Date.now());
 			const maxAllowedTime = turnDuration + GRACE_PERIOD_MS;
 
-			// Reject guess if it arrives too late (after turn time + grace period)
-			if (!gs.turnActive || elapsedTime > maxAllowedTime) {
+			// Check if we're within the grace period (allows last-second guesses)
+			// Also accept if server is explicitly in grace period (inGracePeriod flag)
+			const isWithinGracePeriod = gs.inGracePeriod || elapsedTime <= maxAllowedTime;
+
+			// Reject guess only if we're past the grace period
+			if (!isWithinGracePeriod) {
 				console.log(`Late guess rejected from ${guesser}: "${word}" arrived ${Math.floor(elapsedTime / 1000)}s after turn start (max allowed: ${Math.floor(maxAllowedTime / 1000)}s)`);
 				// Notify the specific player that their guess was too late
 				io.to(socket.id).emit("guess-rejected", {
@@ -1285,6 +1301,11 @@ io.on("connection", (socket) => {
 					word: word
 				});
 				return; // Don't process late guesses
+			}
+
+			// Log grace period guess for debugging
+			if (!gs.turnActive && isWithinGracePeriod) {
+				console.log(`Grace period guess accepted from ${guesser}: "${word}" at ${Math.floor(elapsedTime / 1000)}s (grace period active)`);
 			}
 
 			// Initialize guessed words tracking if not exists
@@ -1572,175 +1593,200 @@ io.on("connection", (socket) => {
 		if (room && room.gameState) {
 			const gs = room.gameState;
 
-			// Get describer info for this turn
-			const currentTeam = gs.teams[gs.currentTeamIndex];
-			const describerIndex = gs.currentDescriberIndex[gs.currentTeamIndex];
-			const describer = currentTeam?.players?.[describerIndex] || 'Unknown';
+			// GRACE PERIOD: Delay turn finalization to allow last-second guesses to be processed
+			// Keep turnStartTime intact so grace period guesses can still be validated
+			const GRACE_PERIOD_MS = 2000; // 2 second grace period
 
-			// Check if there are any reported taboo words that need voting
-			const pendingTabooWords = [];
-			if (gs.confirmedTaboos && gs.confirmedTaboos.length > 0 && gs.confirmedTabooDetails) {
-				gs.confirmedTabooDetails.forEach(taboo => {
-					pendingTabooWords.push({
-						word: taboo.word,
-						points: taboo.points,
-						teamIndex: gs.currentTeamIndex,
-						describer: describer
-					});
-				});
-			}
+			// Mark that we're in grace period (turn is ending but still accepting guesses)
+			gs.inGracePeriod = true;
 
-			console.log(`[END-TURN] Room ${roomCode}: pendingTabooWords count = ${pendingTabooWords.length}`);
-			if (pendingTabooWords.length > 0) {
-				console.log(`[END-TURN] Pending taboo words:`, pendingTabooWords);
-			}
+			console.log(`[END-TURN] Room ${roomCode}: Starting ${GRACE_PERIOD_MS}ms grace period for last-second guesses`);
 
-			// Get all socket IDs in the room for debugging
-			const roomSockets = io.sockets.adapter.rooms.get(roomCode);
-			const socketCount = roomSockets ? roomSockets.size : 0;
-			console.log(`[END-TURN] Broadcasting turn-ended to room ${roomCode} with ${socketCount} connected sockets`);
-			if (roomSockets) {
-				const socketIds = Array.from(roomSockets);
-				console.log(`[END-TURN] Socket IDs in room:`, socketIds);
-				// Also log the player names for each socket
-				socketIds.forEach(sid => {
-					const s = io.sockets.sockets.get(sid);
-					console.log(`[END-TURN] Socket ${sid} player: ${s?.playerName || 'unknown'}`);
-				});
-			}
+			// Delay the actual turn finalization
+			setTimeout(() => {
+				const roomAfterGrace = gameRooms.get(roomCode);
+				if (!roomAfterGrace || !roomAfterGrace.gameState) return;
 
-			// Broadcast the turn ended event with pending taboo info to ALL sockets in room
-			io.to(roomCode).emit("turn-ended", {
-				guessedCount,
-				skippedCount,
-				totalPoints,
-				guessedWords: guessedWords || gs.currentTurnGuessedWords || [],
-				guessedByPlayer: guessedByPlayer || gs.guessedByPlayer || [],
-				allWords: allWords || [],
-				gameState: gs,
-				pendingTabooWords: pendingTabooWords, // Include pending taboos in turn-ended event
-			});
+				const gsAfterGrace = roomAfterGrace.gameState;
+				gsAfterGrace.inGracePeriod = false;
 
-			// Store round history for session persistence
-			if (!room.roundHistory) {
-				room.roundHistory = [];
-			}
-			room.roundHistory.push({
-				round: gs.round,
-				teamIndex: gs.currentTeamIndex,
-				describer: describer,
-				teamName: gs.teams[gs.currentTeamIndex]?.name || `Team ${gs.currentTeamIndex + 1}`,
-				tabooWords: pendingTabooWords.length > 0 ? pendingTabooWords.map(t => ({
-					word: t.word,
-					points: t.points,
-					confirmed: false // Will be updated when voting completes
-				})) : undefined
-			});
+				// Get describer info for this turn
+				const currentTeam = gsAfterGrace.teams[gsAfterGrace.currentTeamIndex];
+				const describerIndex = gsAfterGrace.currentDescriberIndex[gsAfterGrace.currentTeamIndex];
+				const describer = currentTeam?.players?.[describerIndex] || 'Unknown';
 
-			// Clear current words and turn state
-			gs.currentWords = [];
-			gs.timeRemaining = 0;
-			gs.guessedByPlayer = [];
-			gs.turnActive = false;
-			gs.turnStartTime = null;
-
-			// If there are pending taboo words, handle based on taboo settings
-			if (pendingTabooWords.length > 0) {
-				const tabooVotingEnabled = room.tabooVoting !== false; // Default to enabled
-
-				if (tabooVotingEnabled) {
-					// Voting is enabled - start the voting phase
-					gs.pendingTabooVoting = {
-						words: pendingTabooWords,
-						votes: {},
-						timeRemaining: 30,
-						startTime: Date.now()
-					};
-
-					// Broadcast voting start after a short delay to ensure turn-ended is processed first
-					setTimeout(() => {
-						io.to(roomCode).emit("taboo-voting-start", {
-							pendingTabooWords: pendingTabooWords
+				// Check if there are any reported taboo words that need voting
+				const pendingTabooWords = [];
+				if (gsAfterGrace.confirmedTaboos && gsAfterGrace.confirmedTaboos.length > 0 && gsAfterGrace.confirmedTabooDetails) {
+					gsAfterGrace.confirmedTabooDetails.forEach(taboo => {
+						pendingTabooWords.push({
+							word: taboo.word,
+							points: taboo.points,
+							teamIndex: gsAfterGrace.currentTeamIndex,
+							describer: describer
 						});
-					}, 100);
-
-					// Start voting timer
-					const votingInterval = setInterval(() => {
-						const room = gameRooms.get(roomCode);
-						if (!room || !room.gameState || !room.gameState.pendingTabooVoting) {
-							clearInterval(votingInterval);
-							return;
-						}
-
-						const voting = room.gameState.pendingTabooVoting;
-						const elapsed = Math.floor((Date.now() - voting.startTime) / 1000);
-						voting.timeRemaining = Math.max(0, 30 - elapsed);
-
-						// Sync time to all players
-						io.to(roomCode).emit("round-end-vote-sync", {
-							votes: voting.votes,
-							timeRemaining: voting.timeRemaining
-						});
-
-						// Check if voting time is up
-						if (voting.timeRemaining <= 0) {
-							clearInterval(votingInterval);
-							completeTabooVoting(roomCode);
-						}
-					}, 1000);
-				} else {
-					// Voting is disabled but reporting is on - auto-confirm all reported taboos
-					console.log(`[TABOO] Voting disabled in room ${roomCode} - auto-confirming ${pendingTabooWords.length} taboos`);
-
-					// Initialize confirmedTaboosByTeam if not exists (store total deductions per team)
-					if (!gs.confirmedTaboosByTeam) {
-						gs.confirmedTaboosByTeam = {};
-					}
-
-					// All reported taboos are auto-confirmed - build proper format
-					const confirmedTabooWords = pendingTabooWords.map(tabooWord => ({
-						word: tabooWord.word,
-						points: tabooWord.points,
-						teamIndex: tabooWord.teamIndex,
-						describer: tabooWord.describer
-					}));
-
-					// Add up deductions and track per player
-					confirmedTabooWords.forEach(taboo => {
-						// Use teamIndex from the taboo word itself
-						if (!gs.confirmedTaboosByTeam[taboo.teamIndex]) {
-							gs.confirmedTaboosByTeam[taboo.teamIndex] = 0;
-						}
-						gs.confirmedTaboosByTeam[taboo.teamIndex] += taboo.points;
-
-						// Also track taboo words per player in playerContributions
-						if (taboo.describer) {
-							if (!gs.playerContributions[taboo.describer]) {
-								gs.playerContributions[taboo.describer] = {
-									points: 0,
-									guessedWords: [],
-									describedWords: [],
-									tabooWords: []
-								};
-							}
-							if (!gs.playerContributions[taboo.describer].tabooWords) {
-								gs.playerContributions[taboo.describer].tabooWords = [];
-							}
-							gs.playerContributions[taboo.describer].tabooWords.push({
-								word: taboo.word,
-								points: taboo.points
-							});
-						}
-					});
-
-					// Emit voting complete with all words confirmed (using same format as completeTabooVoting)
-					io.to(roomCode).emit("taboo-voting-complete", {
-						confirmedTabooWords: confirmedTabooWords,
-						failedTabooWords: [],
-						confirmedTaboosByTeam: gs.confirmedTaboosByTeam
 					});
 				}
-			}
+
+				console.log(`[END-TURN] Room ${roomCode}: Grace period ended. pendingTabooWords count = ${pendingTabooWords.length}`);
+				console.log(`[END-TURN] Room ${roomCode}: Final guessed words count = ${gsAfterGrace.currentTurnGuessedWords?.length || 0}`);
+				if (pendingTabooWords.length > 0) {
+					console.log(`[END-TURN] Pending taboo words:`, pendingTabooWords);
+				}
+
+				// Get all socket IDs in the room for debugging
+				const roomSockets = io.sockets.adapter.rooms.get(roomCode);
+				const socketCount = roomSockets ? roomSockets.size : 0;
+				console.log(`[END-TURN] Broadcasting turn-ended to room ${roomCode} with ${socketCount} connected sockets`);
+				if (roomSockets) {
+					const socketIds = Array.from(roomSockets);
+					console.log(`[END-TURN] Socket IDs in room:`, socketIds);
+					// Also log the player names for each socket
+					socketIds.forEach(sid => {
+						const s = io.sockets.sockets.get(sid);
+						console.log(`[END-TURN] Socket ${sid} player: ${s?.playerName || 'unknown'}`);
+					});
+				}
+
+				// Calculate final points from server's authoritative guessedByPlayer list
+				const serverGuessedWords = gsAfterGrace.currentTurnGuessedWords || [];
+				const serverGuessedByPlayer = gsAfterGrace.guessedByPlayer || [];
+				const finalTotalPoints = serverGuessedByPlayer.reduce((sum, g) => sum + (g.points || 0), 0);
+
+				// Broadcast the turn ended event with pending taboo info to ALL sockets in room
+				// Use server's authoritative data, not client-provided data
+				io.to(roomCode).emit("turn-ended", {
+					guessedCount: serverGuessedWords.length,
+					skippedCount,
+					totalPoints: finalTotalPoints,
+					guessedWords: serverGuessedWords,
+					guessedByPlayer: serverGuessedByPlayer,
+					allWords: allWords || [],
+					gameState: gsAfterGrace,
+					pendingTabooWords: pendingTabooWords, // Include pending taboos in turn-ended event
+				});
+
+				// Store round history for session persistence
+				if (!roomAfterGrace.roundHistory) {
+					roomAfterGrace.roundHistory = [];
+				}
+				roomAfterGrace.roundHistory.push({
+					round: gsAfterGrace.round,
+					teamIndex: gsAfterGrace.currentTeamIndex,
+					describer: describer,
+					teamName: gsAfterGrace.teams[gsAfterGrace.currentTeamIndex]?.name || `Team ${gsAfterGrace.currentTeamIndex + 1}`,
+					tabooWords: pendingTabooWords.length > 0 ? pendingTabooWords.map(t => ({
+						word: t.word,
+						points: t.points,
+						confirmed: false // Will be updated when voting completes
+					})) : undefined
+				});
+
+				// Clear current words and turn state AFTER grace period
+				gsAfterGrace.currentWords = [];
+				gsAfterGrace.timeRemaining = 0;
+				gsAfterGrace.guessedByPlayer = [];
+				gsAfterGrace.turnActive = false;
+				gsAfterGrace.turnStartTime = null;
+
+				// If there are pending taboo words, handle based on taboo settings
+				if (pendingTabooWords.length > 0) {
+					const tabooVotingEnabled = roomAfterGrace.tabooVoting !== false; // Default to enabled
+
+					if (tabooVotingEnabled) {
+						// Voting is enabled - start the voting phase
+						gsAfterGrace.pendingTabooVoting = {
+							words: pendingTabooWords,
+							votes: {},
+							timeRemaining: 30,
+							startTime: Date.now()
+						};
+
+						// Broadcast voting start after a short delay to ensure turn-ended is processed first
+						setTimeout(() => {
+							io.to(roomCode).emit("taboo-voting-start", {
+								pendingTabooWords: pendingTabooWords
+							});
+						}, 100);
+
+						// Start voting timer
+						const votingInterval = setInterval(() => {
+							const room = gameRooms.get(roomCode);
+							if (!room || !room.gameState || !room.gameState.pendingTabooVoting) {
+								clearInterval(votingInterval);
+								return;
+							}
+
+							const voting = room.gameState.pendingTabooVoting;
+							const elapsed = Math.floor((Date.now() - voting.startTime) / 1000);
+							voting.timeRemaining = Math.max(0, 30 - elapsed);
+
+							// Sync time to all players
+							io.to(roomCode).emit("round-end-vote-sync", {
+								votes: voting.votes,
+								timeRemaining: voting.timeRemaining
+							});
+
+							// Check if voting time is up
+							if (voting.timeRemaining <= 0) {
+								clearInterval(votingInterval);
+								completeTabooVoting(roomCode);
+							}
+						}, 1000);
+					} else {
+						// Voting is disabled but reporting is on - auto-confirm all reported taboos
+						console.log(`[TABOO] Voting disabled in room ${roomCode} - auto-confirming ${pendingTabooWords.length} taboos`);
+
+						// Initialize confirmedTaboosByTeam if not exists (store total deductions per team)
+						if (!gsAfterGrace.confirmedTaboosByTeam) {
+							gsAfterGrace.confirmedTaboosByTeam = {};
+						}
+
+						// All reported taboos are auto-confirmed - build proper format
+						const confirmedTabooWords = pendingTabooWords.map(tabooWord => ({
+							word: tabooWord.word,
+							points: tabooWord.points,
+							teamIndex: tabooWord.teamIndex,
+							describer: tabooWord.describer
+						}));
+
+						// Add up deductions and track per player
+						confirmedTabooWords.forEach(taboo => {
+							// Use teamIndex from the taboo word itself
+							if (!gsAfterGrace.confirmedTaboosByTeam[taboo.teamIndex]) {
+								gsAfterGrace.confirmedTaboosByTeam[taboo.teamIndex] = 0;
+							}
+							gsAfterGrace.confirmedTaboosByTeam[taboo.teamIndex] += taboo.points;
+
+							// Also track taboo words per player in playerContributions
+							if (taboo.describer) {
+								if (!gsAfterGrace.playerContributions[taboo.describer]) {
+									gsAfterGrace.playerContributions[taboo.describer] = {
+										points: 0,
+										guessedWords: [],
+										describedWords: [],
+										tabooWords: []
+									};
+								}
+								if (!gsAfterGrace.playerContributions[taboo.describer].tabooWords) {
+									gsAfterGrace.playerContributions[taboo.describer].tabooWords = [];
+								}
+								gsAfterGrace.playerContributions[taboo.describer].tabooWords.push({
+									word: taboo.word,
+									points: taboo.points
+								});
+							}
+						});
+
+						// Emit voting complete with all words confirmed (using same format as completeTabooVoting)
+						io.to(roomCode).emit("taboo-voting-complete", {
+							confirmedTabooWords: confirmedTabooWords,
+							failedTabooWords: [],
+							confirmedTaboosByTeam: gsAfterGrace.confirmedTaboosByTeam
+						});
+					}
+				}
+			}, GRACE_PERIOD_MS); // End of setTimeout for grace period
 		}
 	});
 
