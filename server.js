@@ -1,9 +1,13 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 // Standalone Express + Socket.IO server for local development
 const express = require("express");
 const http = require("http");
 const socketIO = require("socket.io");
 const cors = require("cors");
 const path = require("path");
+const { google } = require("googleapis");
 
 const app = express();
 const server = http.createServer(app);
@@ -26,6 +30,119 @@ app.use(express.static("public"));
 
 // Game rooms storage
 const gameRooms = new Map();
+
+// Google Sheets Configuration
+// Set these environment variables or hardcode them (not recommended for production)
+const GOOGLE_SHEETS_CREDENTIALS = process.env.GOOGLE_SHEETS_CREDENTIALS || null;
+const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID || null;
+
+// Initialize Google Sheets API
+let sheetsClient = null;
+if (GOOGLE_SHEETS_CREDENTIALS && GOOGLE_SHEETS_ID) {
+	try {
+		const credentials = JSON.parse(GOOGLE_SHEETS_CREDENTIALS);
+		const auth = new google.auth.GoogleAuth({
+			credentials,
+			scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+		});
+		sheetsClient = google.sheets({ version: "v4", auth });
+		console.log("✅ Google Sheets API initialized successfully");
+	} catch (error) {
+		console.error("❌ Failed to initialize Google Sheets API:", error.message);
+		console.log("Word feedback will be stored locally but not sent to Google Sheets");
+	}
+} else {
+	console.log("⚠️ Google Sheets credentials not configured. Set GOOGLE_SHEETS_CREDENTIALS and GOOGLE_SHEETS_ID environment variables.");
+	console.log("Word feedback will be stored locally but not sent to Google Sheets");
+}
+
+// Function to send word feedback to Google Sheets
+async function sendFeedbackToGoogleSheets(feedbackArray) {
+	if (!sheetsClient || !GOOGLE_SHEETS_ID || feedbackArray.length === 0) {
+		console.log("Skipping Google Sheets upload (not configured or no feedback)");
+		return;
+	}
+
+	try {
+		// Prepare rows for Google Sheets
+		const rows = feedbackArray.map(fb => [
+			fb.timestamp,
+			fb.roomCode,
+			fb.playerName,
+			fb.word,
+			fb.difficulty,
+			fb.feedback,
+		]);
+
+		// Append to Google Sheets
+		await sheetsClient.spreadsheets.values.append({
+			spreadsheetId: GOOGLE_SHEETS_ID,
+			range: "Feedback!A:F", // Sheet name and range
+			valueInputOption: "RAW",
+			insertDataOption: "INSERT_ROWS",
+			resource: {
+				values: rows,
+			},
+		});
+
+		console.log(`✅ Sent ${rows.length} feedback entries to Google Sheets`);
+	} catch (error) {
+		console.error("❌ Error sending feedback to Google Sheets:", error.message);
+	}
+}
+
+// Function to send suggestions to Google Sheets (separate sheet/tab)
+async function sendSuggestionsToGoogleSheets(suggestionsArray) {
+	if (!sheetsClient || !GOOGLE_SHEETS_ID || !suggestionsArray || suggestionsArray.length === 0) {
+		console.log("Skipping Google Sheets suggestions upload (not configured or no suggestions)");
+		return;
+	}
+
+	try {
+		const rows = suggestionsArray.map(s => [
+			s.timestamp,
+			s.roomCode || '',
+			s.playerName || '',
+			s.word || '',
+			s.difficulty || ''
+		]);
+
+		await sheetsClient.spreadsheets.values.append({
+			spreadsheetId: GOOGLE_SHEETS_ID,
+			range: "Suggestions!A:E",
+			valueInputOption: "RAW",
+			insertDataOption: "INSERT_ROWS",
+			resource: { values: rows }
+		});
+
+		console.log(`✅ Sent ${rows.length} suggestion entries to Google Sheets`);
+	} catch (error) {
+		console.error("❌ Error sending suggestions to Google Sheets:", error.message);
+	}
+}
+
+// Helper function to handle room closure and send feedback
+async function handleRoomClosure(room, roomCode, reason = "Room closed") {
+	if (room.wordFeedback && room.wordFeedback.length > 0) {
+		console.log(`📤 Sending ${room.wordFeedback.length} feedback entries from room ${roomCode} (${reason})`);
+		await sendFeedbackToGoogleSheets(room.wordFeedback);
+		room.wordFeedback = []; // Clear feedback after sending
+	}
+	// Send any collected suggestions to Google Sheets as well
+	if (room.suggestedWords && room.suggestedWords.length > 0) {
+		console.log(`📤 Sending ${room.suggestedWords.length} suggestion entries from room ${roomCode} (${reason})`);
+		// Ensure each suggestion row includes roomCode and timestamp
+		const suggestionsToSend = room.suggestedWords.map(s => ({
+			timestamp: s.timestamp || new Date().toISOString(),
+			roomCode: roomCode,
+			playerName: s.playerName || '',
+			word: s.word || '',
+			difficulty: s.difficulty || ''
+		}));
+		await sendSuggestionsToGoogleSheets(suggestionsToSend);
+		room.suggestedWords = [];
+	}
+}
 
 // Helper function to check if a socket is admin (host or co-admin)
 function isAdmin(room, socketId) {
@@ -245,6 +362,9 @@ const easyCount = wordDatabase.filter(w => w.difficulty === 'easy').length;
 const mediumCount = wordDatabase.filter(w => w.difficulty === 'medium').length;
 const hardCount = wordDatabase.filter(w => w.difficulty === 'hard').length;
 console.log(`Word database loaded: ${easyCount} easy, ${mediumCount} medium, ${hardCount} hard (total: ${wordDatabase.length})`);
+
+// Build a fast lookup Set for existence checks (normalized lowercase)
+const wordSet = new Set(wordDatabase.map(w => (w.word || '').toString().trim().toLowerCase()));
 
 // Fisher-Yates shuffle algorithm
 function shuffleArray(array) {
@@ -817,6 +937,8 @@ io.on("connection", (socket) => {
 			roundHistory: [], // Store round history for reconnecting players
 			bannedPlayers: new Set(), // Track banned player names (for display)
 			bannedIPs: new Set(), // Track banned IPs to prevent rejoining
+			wordFeedback: [], // Store word feedback from players
+			suggestedWords: [], // Store user-suggested words
 		};
 
 		gameRooms.set(roomCode, room);
@@ -1150,6 +1272,70 @@ io.on("connection", (socket) => {
 			} else {
 				console.log(`Unauthorized taboo settings change attempt in room ${roomCode} by socket ${socket.id}`);
 			}
+		}
+	});
+
+	// Quick existence check for suggested words (fast O(1) lookup using in-memory Set)
+	socket.on('check-word-exists', (data) => {
+		const { roomCode, word } = data || {};
+		if (!word) {
+			socket.emit('check-word-result', { word: '', exists: false });
+			return;
+		}
+		const normalized = word.toString().trim().toLowerCase();
+		const exists = wordSet.has(normalized);
+		// Reply only to the requesting socket
+		socket.emit('check-word-result', { word, exists });
+	});
+
+	// Receive suggested words from clients
+	socket.on('suggest-word', (data) => {
+		const { roomCode, playerName, word, difficulty, timestamp } = data || {};
+		const room = gameRooms.get(roomCode);
+		if (!room) return;
+
+		// Ensure suggestedWords array exists
+		if (!room.suggestedWords) room.suggestedWords = [];
+
+		const normalizedUpper = (word || '').toString().trim().toUpperCase();
+		const normalizedLower = normalizedUpper.toLowerCase();
+		const exists = wordSet.has(normalizedLower);
+		const alreadySuggested = room.suggestedWords.some(s => s.word === normalizedUpper);
+
+		if (!alreadySuggested) {
+			// Store suggestion with metadata (include suggested difficulty)
+			room.suggestedWords.push({ playerName, word: normalizedUpper, difficulty: difficulty || 'medium', timestamp: timestamp || new Date().toISOString(), exists });
+			console.log(`Suggestion in room ${roomCode}: "${normalizedUpper}" by ${playerName} (exists=${exists})`);
+		} else {
+			console.log(`Duplicate suggestion suppressed in room ${roomCode}: "${normalizedUpper}" by ${playerName}`);
+		}
+
+		// Reply to client with result and explicit success flag
+		socket.emit('suggest-word-result', { success: true, word: normalizedUpper, exists, alreadySuggested, difficulty: difficulty || 'medium' });
+	});
+
+	// Submit word feedback
+	socket.on("submit-word-feedback", (data) => {
+		const { roomCode, playerName, word, difficulty, feedback, timestamp } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room) {
+			// Initialize wordFeedback array if it doesn't exist
+			if (!room.wordFeedback) {
+				room.wordFeedback = [];
+			}
+
+			// Store the feedback
+			room.wordFeedback.push({
+				roomCode,
+				playerName,
+				word,
+				difficulty,
+				feedback,
+				timestamp,
+			});
+
+			console.log(`Word feedback submitted in room ${roomCode}: "${word}" by ${playerName} - "${feedback}"`);
 		}
 	});
 
@@ -2075,7 +2261,10 @@ io.on("connection", (socket) => {
 
 			// Check if game is over
 			if (gs.round > gs.maxRounds) {
-				io.to(roomCode).emit("game-over", { gameState: gs });
+				// Game over - send feedback before emitting
+				handleRoomClosure(room, roomCode, "Game completed naturally").then(() => {
+					io.to(roomCode).emit("game-over", { gameState: gs });
+				});
 				return;
 			}
 
@@ -2145,8 +2334,11 @@ io.on("connection", (socket) => {
 
 				// If room is empty, delete it
 				if (room.players.length === 0) {
-					gameRooms.delete(roomCode);
-					console.log(`Room ${roomCode} deleted (empty after leave)`);
+					// Send feedback before deleting room
+					handleRoomClosure(room, roomCode, "Room empty after player left").then(() => {
+						gameRooms.delete(roomCode);
+						console.log(`Room ${roomCode} deleted (empty after leave)`);
+					});
 				} else {
 					// Remove player from teams if game has started
 					if (room.gameState) {
@@ -2202,12 +2394,15 @@ io.on("connection", (socket) => {
 							room.gameState.gameStarted
 						) {
 							if (team0Empty && team1Empty) {
-								io.to(roomCode).emit("game-over", {
-									gameState: room.gameState,
-									message: "All players left. Game ended.",
+								// Both teams empty - send feedback before ending
+								handleRoomClosure(room, roomCode, "All players left").then(() => {
+									io.to(roomCode).emit("game-over", {
+										gameState: room.gameState,
+										message: "All players left. Game ended.",
+									});
+									room.gameState = null;
+									room.started = false;
 								});
-								room.gameState = null;
-								room.started = false;
 							} else {
 								const otherTeamIndex = currentTeamIndex === 0 ? 1 : 0;
 								if (room.gameState.teams[otherTeamIndex].players.length > 0) {
@@ -2476,16 +2671,19 @@ io.on("connection", (socket) => {
 		const room = gameRooms.get(roomCode);
 
 		if (room && isAdmin(room, socket.id) && room.gameState) {
-			// Emit game over with admin message
-			io.to(roomCode).emit("game-over", {
-				gameState: room.gameState,
-				message: "Game ended by host",
-			});
+			// Send feedback to Google Sheets before ending game
+			handleRoomClosure(room, roomCode, "Game ended by admin").then(() => {
+				// Emit game over with admin message
+				io.to(roomCode).emit("game-over", {
+					gameState: room.gameState,
+					message: "Game ended by host",
+				});
 
-			// Clear game state
-			room.gameState = null;
-			room.started = false;
-			console.log(`Host ended game in room ${roomCode}`);
+				// Clear game state
+				room.gameState = null;
+				room.started = false;
+				console.log(`Host ended game in room ${roomCode}`);
+			});
 		}
 	});
 
@@ -2504,13 +2702,15 @@ io.on("connection", (socket) => {
 			if (gs.currentTeamIndex === 0) {
 				gs.round++;
 				if (gs.round > gs.maxRounds) {
-					// Game over
-					io.to(roomCode).emit("game-over", {
-						gameState: gs,
-						message: "Maximum rounds reached",
+					// Game over - send feedback before emitting
+					handleRoomClosure(room, roomCode, "Maximum rounds reached").then(() => {
+						io.to(roomCode).emit("game-over", {
+							gameState: gs,
+							message: "Maximum rounds reached",
+						});
+						room.gameState = null;
+						room.started = false;
 					});
-					room.gameState = null;
-					room.started = false;
 					return;
 				}
 			}
@@ -2805,12 +3005,15 @@ io.on("connection", (socket) => {
 
 							// If both teams are empty, end the game
 							if (team0Empty && team1Empty) {
-								io.to(roomCode).emit("game-over", {
-									gameState: room.gameState,
-									message: "All players left. Game ended.",
+								// Both teams empty from disconnect - send feedback before ending
+								handleRoomClosure(room, roomCode, "All players disconnected").then(() => {
+									io.to(roomCode).emit("game-over", {
+										gameState: room.gameState,
+										message: "All players left. Game ended.",
+									});
+									room.gameState = null;
+									room.started = false;
 								});
-								room.gameState = null;
-								room.started = false;
 							}
 
 							// If describer left during active turn, notify players

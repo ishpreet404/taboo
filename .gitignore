@@ -1,5 +1,6 @@
 node_modules/
 .env
+.env.local
 .DS_Store
 *.log
 npm-debug.log*
@@ -8,3 +9,7 @@ yarn-error.log*
 .netlify/
 dist/
 .cache/
+
+# Sensitive word database (optional - remove if you want to share word list)
+# wordDatabase.json
+# taboo_word_pack_final.json

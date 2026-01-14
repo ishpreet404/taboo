@@ -1,11 +1,11 @@
 'use client'
 
-import { Clock, Copy, Lock, LogOut, Settings, Shield, Shuffle, SkipForward, Trophy, Unlock, UserCheck, Users, UserX, Zap } from 'lucide-react'
+import { Clock, Copy, Info, Lock, LogOut, MessageSquare, Settings, Shield, Shuffle, SkipForward, Trophy, Unlock, UserCheck, Users, UserX, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
@@ -38,6 +38,20 @@ export default function GameScreen() {
   const [myRoundEndVotes, setMyRoundEndVotes] = useState<Map<string, 'yes' | 'no'>>(new Map()) // My vote for each word (yes = taboo, no = not taboo)
   const [votingTimeRemaining, setVotingTimeRemaining] = useState(30) // Countdown for voting
   const [showGracePeriod, setShowGracePeriod] = useState(false) // Show grace period transition
+  const [feedbackModal, setFeedbackModal] = useState<{ word: string; difficulty: string } | null>(null) // Word feedback modal state
+  const [feedbackText, setFeedbackText] = useState('') // Feedback text input
+  const [feedbackOptions, setFeedbackOptions] = useState<{
+    changeDifficultyTo: string | null
+    wordTooDifficult: boolean
+  }>({ changeDifficultyTo: null, wordTooDifficult: false })
+  // Suggestion modal state
+  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false)
+  const [suggestionText, setSuggestionText] = useState('')
+  const [suggestionChecking, setSuggestionChecking] = useState(false)
+  const [suggestionCheckResult, setSuggestionCheckResult] = useState<{ exists: boolean; word: string } | null>(null)
+  const [suggestionDifficulty, setSuggestionDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
+  const [suggestionSubmitting, setSuggestionSubmitting] = useState(false)
+  const [suggestionSubmitted, setSuggestionSubmitted] = useState(false)
 
   const currentTeam = gameState.teams[gameState.currentTeamIndex]
   const currentDescriberIndex = gameState.currentDescriberIndex?.[gameState.currentTeamIndex] ?? 0
@@ -995,6 +1009,119 @@ export default function GameScreen() {
     socket?.emit('admin-resume-timer', { roomCode })
   }
 
+  const handleOpenFeedbackModal = (word: string, difficulty: string) => {
+    setFeedbackModal({ word, difficulty })
+    setFeedbackText('')
+    setFeedbackOptions({ changeDifficultyTo: null, wordTooDifficult: false })
+  }
+
+  const handleSubmitFeedback = () => {
+    if (feedbackModal && (feedbackOptions.changeDifficultyTo || feedbackOptions.wordTooDifficult || feedbackText.trim())) {
+      // Build feedback message from options
+      const feedbackParts: string[] = []
+
+      if (feedbackOptions.changeDifficultyTo) {
+        feedbackParts.push(`Suggested difficulty: ${feedbackOptions.changeDifficultyTo}`)
+      }
+      if (feedbackOptions.wordTooDifficult) {
+        feedbackParts.push('Word too difficult')
+      }
+      if (feedbackText.trim()) {
+        feedbackParts.push(feedbackText.trim())
+      }
+
+      const fullFeedback = feedbackParts.join(' | ')
+      submitWordFeedback(feedbackModal.word, fullFeedback, feedbackModal.difficulty)
+      setNotification({ message: 'Feedback submitted! Thank you for helping improve the word list.', type: 'success' })
+      setTimeout(() => setNotification(null), 3000)
+      setFeedbackModal(null)
+      setFeedbackText('')
+      setFeedbackOptions({ changeDifficultyTo: null, wordTooDifficult: false })
+    }
+  }
+
+  // Suggestions: open/close modal, check existence, and submit
+  const openSuggestionModal = () => {
+    setSuggestionModalOpen(true)
+    setSuggestionText('')
+    setSuggestionCheckResult(null)
+    setSuggestionSubmitting(false)
+    setSuggestionSubmitted(false)
+  }
+
+  const closeSuggestionModal = () => {
+    setSuggestionModalOpen(false)
+    setSuggestionText('')
+    setSuggestionCheckResult(null)
+    setSuggestionChecking(false)
+    setSuggestionSubmitting(false)
+    setSuggestionSubmitted(false)
+  }
+
+  const submitSuggestion = () => {
+    if (!suggestionText.trim()) return
+    // Prevent double-submits
+    if (suggestionSubmitting || suggestionSubmitted) return
+    // If we've already checked and the word exists, block submit
+    if (suggestionCheckResult && suggestionCheckResult.exists) {
+      setNotification({ message: `"${suggestionCheckResult.word}" already exists in the database.`, type: 'warning' })
+      setTimeout(() => setNotification(null), 3000)
+      return
+    }
+    setSuggestionSubmitting(true)
+    socket?.emit('suggest-word', { roomCode, playerName, word: suggestionText.trim(), difficulty: suggestionDifficulty, timestamp: new Date().toISOString() })
+  }
+
+  useEffect(() => {
+    if (!socket) return
+    const onCheck = (payload: { exists: boolean; word: string }) => {
+      setSuggestionChecking(false)
+      setSuggestionCheckResult(payload)
+    }
+    const onSuggest = (payload: { success: boolean; exists: boolean; word: string }) => {
+      // Mark result and show confirmation on success
+      if (payload.success) {
+        setSuggestionCheckResult({ exists: payload.exists, word: payload.word })
+        setSuggestionSubmitting(false)
+        setSuggestionSubmitted(true)
+        // show a small inline confirmation
+        setNotification({ message: `Suggestion recorded: "${payload.word}"`, type: 'success' })
+        setTimeout(() => setNotification(null), 3000)
+      } else {
+        setSuggestionSubmitting(false)
+      }
+    }
+    socket.on('check-word-result', onCheck)
+    socket.on('suggest-word-result', onSuggest)
+    return () => {
+      socket.off('check-word-result', onCheck)
+      socket.off('suggest-word-result', onSuggest)
+    }
+  }, [socket])
+
+  // Debounced live-check while typing — wordSet lookup server-side is O(1), so per-keystroke debounced checks are fine
+  useEffect(() => {
+    if (!socket) return
+    if (!suggestionText.trim()) {
+      setSuggestionCheckResult(null)
+      setSuggestionChecking(false)
+      return
+    }
+
+    setSuggestionChecking(true)
+    const id = setTimeout(() => {
+      socket.emit('check-word-exists', { word: suggestionText.trim().toLowerCase() })
+    }, 400)
+
+    return () => clearTimeout(id)
+  }, [suggestionText, socket])
+
+  // Get other difficulty options based on current difficulty
+  const getOtherDifficulties = (currentDifficulty: string): string[] => {
+    const difficulties = ['easy', 'medium', 'hard']
+    return difficulties.filter(d => d !== currentDifficulty)
+  }
+
   const handleToggleTeamSwitching = () => {
     if (!isAdmin) return
     socket?.emit('admin-toggle-team-switching', { roomCode })
@@ -1064,6 +1191,15 @@ export default function GameScreen() {
               >
                 <UserCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 <span className="hidden sm:inline">Change Team</span>
+              </button>
+              {/* Suggestion Button - open suggestion modal */}
+              <button
+                onClick={openSuggestionModal}
+                title="Suggest a word"
+                className="px-3 sm:px-4 py-2.5 glass-strong rounded-xl transition-colors flex items-center gap-2 text-sm font-medium border shadow-lg h-10 sm:h-11 text-amber-400 hover:bg-amber-500/10 border-amber-500/20"
+              >
+                <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span className="hidden sm:inline">Suggest</span>
               </button>
             </div>
 
@@ -1891,11 +2027,20 @@ export default function GameScreen() {
                         return (
                           <div
                             key={`prev-${wordObj.word}-${index}`}
-                            className={`glass-strong rounded-lg p-2 sm:p-3 border ${wasGuessed
+                            className={`relative glass-strong rounded-lg p-2 sm:p-3 border ${wasGuessed
                               ? 'border-green-500/50 bg-green-500/10'
                               : 'border-red-500/50 bg-red-500/10'
                               }`}
                           >
+                            {/* Feedback Icon */}
+                            <button
+                              onClick={() => handleOpenFeedbackModal(wordObj.word, wordObj.difficulty)}
+                              className="absolute top-1 right-1 p-1 rounded-full glass hover:bg-red-500/30 transition-colors group"
+                              title="Report word difficulty"
+                            >
+                              <Info className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-400 group-hover:text-red-300" />
+                            </button>
+
                             <div className="text-center">
                               <div className="flex items-center justify-center gap-1 mb-1">
                                 <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${getDifficultyBadge(wordObj.difficulty).color}`}>
@@ -2078,7 +2223,7 @@ export default function GameScreen() {
         {/* Grace Period Transition Overlay */}
         {
           showGracePeriod && (
-            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, margin: 0 }}>
               <div className="glass-strong rounded-2xl p-8 border-2 border-blue-500/50 bg-blue-500/10 shadow-2xl text-center">
                 <div className="flex flex-col items-center gap-4">
                   {/* Animated spinner */}
@@ -2295,6 +2440,208 @@ export default function GameScreen() {
             </div>
           )
         }
+
+        {/* Word Feedback Modal */}
+        {feedbackModal && (
+          <div
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+            onClick={() => setFeedbackModal(null)}
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, margin: 0 }}
+          >
+            <div
+              className="glass-strong rounded-2xl p-6 md:p-8 max-w-md w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <Info className="w-6 h-6 text-blue-400" />
+                <h3 className="text-xl md:text-2xl font-bold">Word Feedback</h3>
+              </div>
+
+              <div className="mb-4">
+                <div className="glass rounded-lg p-3 mb-3">
+                  <div className="text-sm text-gray-400 mb-1">Word:</div>
+                  <div className="text-xl font-bold text-white">{feedbackModal.word}</div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className={`text-xs font-bold px-2 py-1 rounded ${getDifficultyBadge(feedbackModal.difficulty).color}`}>
+                      {getDifficultyBadge(feedbackModal.difficulty).label}
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      {feedbackModal.difficulty.toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-sm text-gray-300 mb-3">
+                  Help us improve! Select options or provide details:
+                </div>
+
+                {/* Feedback Options */}
+                <div className="space-y-3 mb-4">
+                  {/* Change Difficulty Options */}
+                  <div className="glass rounded-lg p-3">
+                    <div className="text-xs font-semibold text-gray-400 mb-2">Change word difficulty to:</div>
+                    <div className="space-y-2">
+                      {getOtherDifficulties(feedbackModal.difficulty).map(difficulty => (
+                        <label
+                          key={difficulty}
+                          className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-2 rounded transition-colors"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={feedbackOptions.changeDifficultyTo === difficulty}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setFeedbackOptions(prev => ({ ...prev, changeDifficultyTo: difficulty }))
+                              } else if (feedbackOptions.changeDifficultyTo === difficulty) {
+                                setFeedbackOptions(prev => ({ ...prev, changeDifficultyTo: null }))
+                              }
+                            }}
+                            className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-gray-900"
+                          />
+                          <span className="text-sm capitalize flex items-center gap-2">
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded ${getDifficultyBadge(difficulty).color}`}>
+                              {getDifficultyBadge(difficulty).label}
+                            </span>
+                            {difficulty}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Word Too Difficult Option */}
+                  <div className="glass rounded-lg p-3">
+                    <label className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-2 rounded transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={feedbackOptions.wordTooDifficult}
+                        onChange={(e) => setFeedbackOptions(prev => ({ ...prev, wordTooDifficult: e.target.checked }))}
+                        className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-red-500 focus:ring-red-500 focus:ring-offset-gray-900"
+                      />
+                      <span className="text-sm text-red-300">Word too difficult / should be removed</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Additional Details Text Area */}
+                <div className="mb-4">
+                  <label className="text-xs font-semibold text-gray-400 mb-2 block">
+                    Additional details (optional):
+                  </label>
+                  <textarea
+                    value={feedbackText}
+                    onChange={(e) => setFeedbackText(e.target.value)}
+                    placeholder="Example: Word was too obscure, nobody knew it..."
+                    className="w-full px-4 py-3 glass-strong rounded-lg text-white placeholder-gray-500 border border-white/10 focus:border-blue-500/50 focus:outline-none resize-none"
+                    rows={3}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setFeedbackModal(null)}
+                  className="flex-1 px-4 py-3 glass rounded-xl hover:bg-white/10 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSubmitFeedback}
+                  disabled={!feedbackOptions.changeDifficultyTo && !feedbackOptions.wordTooDifficult && !feedbackText.trim()}
+                  className="flex-1 px-4 py-3 glass-strong hover:bg-blue-500/20 border border-blue-500/30 rounded-xl transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Submit Feedback
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Suggestion Modal */}
+        {suggestionModalOpen && (
+          <div
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[110] flex items-center justify-center p-4"
+            onClick={() => closeSuggestionModal()}
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, margin: 0 }}
+          >
+            <div
+              className="glass-strong rounded-2xl p-6 md:p-8 max-w-md w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <MessageSquare className="w-6 h-6 text-amber-400" />
+                <h3 className="text-xl md:text-2xl font-bold">Suggest a Word</h3>
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs font-semibold text-gray-400 mb-2 block">Word to suggest</label>
+                <input
+                  value={suggestionText}
+                  onChange={(e) => setSuggestionText(e.target.value)}
+                  placeholder="Enter a word to suggest"
+                  className="w-full px-4 py-3 glass-strong rounded-lg text-white placeholder-gray-500 border border-white/10 focus:border-amber-400/50 focus:outline-none"
+                />
+
+                <div className="mt-3">
+                  <div className="text-xs font-semibold text-gray-400 mb-2">Suggested difficulty</div>
+                  <div className="flex gap-2">
+                    {(['easy', 'medium', 'hard'] as const).map(d => (
+                      <button
+                        key={d}
+                        onClick={() => setSuggestionDifficulty(d)}
+                        aria-pressed={suggestionDifficulty === d}
+                        className={`px-3 py-1 rounded-md text-sm font-medium ${suggestionDifficulty === d ? (d === 'easy' ? 'bg-green-400 text-black' : d === 'medium' ? 'bg-amber-400 text-black' : 'bg-red-500 text-black') : 'glass text-white/90 hover:bg-white/5'}`}
+                      >
+                        {d.charAt(0).toUpperCase() + d.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Live-check result shown above the submit button */}
+                <div className="mt-3 text-sm text-gray-300">
+                  {suggestionChecking && <div className="text-xs text-gray-400 mb-1">Checking...</div>}
+                  {suggestionCheckResult ? (
+                    suggestionCheckResult.exists ? (
+                      <div className="text-green-400">"{suggestionCheckResult.word}" already exists in the database.</div>
+                    ) : (
+                      <div className="text-amber-300">"{suggestionCheckResult.word}" not found — will be stored for review.</div>
+                    )
+                  ) : (
+                    <div className="text-xs text-gray-500">Type to check if the word already exists.</div>
+                  )}
+                </div>
+
+                <div className="mt-3">
+                  <button
+                    onClick={submitSuggestion}
+                    disabled={!suggestionText.trim() || (suggestionCheckResult?.exists === true) || suggestionSubmitting || suggestionSubmitted}
+                    className="w-full px-4 py-2 glass-strong hover:bg-amber-500/20 border border-amber-500/30 rounded-xl transition-colors font-semibold disabled:opacity-50"
+                  >
+                    Submit Suggestion
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3">
+                {suggestionSubmitted && (
+                  <div className="text-sm text-green-300 mb-2">Suggestion submitted — thank you!</div>
+                )}
+                <div className="flex justify-center items-center gap-3">
+                  <button
+                    onClick={() => {
+                      setSuggestionSubmitting(false)
+                      setSuggestionSubmitted(false)
+                      closeSuggestionModal()
+                    }}
+                    className="px-3 py-2 glass rounded-md hover:bg-white/10 transition-colors text-sm"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </>
   )

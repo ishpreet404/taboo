@@ -74,6 +74,7 @@ interface GameContextType {
   startGame: (teamCount?: number) => void
   leaveGame: () => void
   setCurrentScreen: (screen: 'room' | 'lobby' | 'game' | 'gameover') => void
+  submitWordFeedback: (word: string, feedback: string, difficulty: string) => void
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined)
@@ -755,6 +756,20 @@ export function GameProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // Function to submit word feedback
+  const submitWordFeedback = (word: string, feedback: string, difficulty: string) => {
+    if (socket && roomCode && playerName) {
+      socket.emit('submit-word-feedback', {
+        roomCode,
+        playerName,
+        word,
+        difficulty,
+        feedback,
+        timestamp: new Date().toISOString()
+      })
+    }
+  }
+
   return (
     <GameContext.Provider
       value={{
@@ -782,7 +797,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         joinTeam,
         startGame,
         leaveGame,
-        setCurrentScreen
+        setCurrentScreen,
+        submitWordFeedback
       }}
     >
       {children}
