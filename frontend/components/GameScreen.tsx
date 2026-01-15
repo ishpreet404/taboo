@@ -1,6 +1,6 @@
 'use client'
 
-import { Clock, Copy, Handshake, Info, Lock, LogOut, MessageSquare, Settings, Shield, Shuffle, SkipForward, Trophy as TrophyIcon, Unlock, UserCheck, Users, UserX, X, XCircle, Zap } from 'lucide-react'
+import { Clock, Copy, Edit3, Handshake, Info, Lock, LogOut, MessageSquare, RefreshCw, Settings, Shield, Shuffle, SkipForward, Trophy as TrophyIcon, Unlock, UserCheck, Users, UserX, X, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 
@@ -18,6 +18,8 @@ export default function GameScreen() {
   const [turnActive, setTurnActive] = useState(false)
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [showAdminPanel, setShowAdminPanel] = useState(false)
+  const [editingTeamIndex, setEditingTeamIndex] = useState<number | null>(null)
+  const [editingTeamName, setEditingTeamName] = useState<string>('')
   const [showBonusNotification, setShowBonusNotification] = useState(false)
   const [bonusWordCount, setBonusWordCount] = useState(0)
   const [bonusMilestones, setBonusMilestones] = useState<number[]>([6, 10, 14, 18, 22]) // Next bonus at 6, then 10, 14, 18, 22...
@@ -937,6 +939,20 @@ export default function GameScreen() {
     setShowHostMenu(null)
   }
 
+  const handleSaveEdit = (teamIndex: number) => {
+    if (!isAdmin) return
+    if (!editingTeamName || editingTeamName.trim().length === 0) {
+      setNotification({ message: 'Team name cannot be empty', type: 'warning' })
+      setTimeout(() => setNotification(null), 2000)
+      return
+    }
+    socket?.emit('rename-team', { roomCode, teamIndex, newName: editingTeamName.trim() })
+    setNotification({ message: 'Renaming team...', type: 'info' })
+    setTimeout(() => setNotification(null), 1500)
+    setEditingTeamIndex(null)
+    setEditingTeamName('')
+  }
+
   const handleEndGame = () => {
     if (!isHost) return
     setConfirmDialog({
@@ -1190,7 +1206,7 @@ export default function GameScreen() {
                       : 'Shuffle teams / switch team assignment'
                 }
               >
-                <Shuffle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <RefreshCw className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 <span className="hidden sm:inline">Change Team</span>
               </button>
               {/* Suggestion Button - open suggestion modal with gamesPlayed badge in its own container */}
@@ -1228,7 +1244,7 @@ export default function GameScreen() {
                   }`}
                 title="Change Team"
               >
-                <Shuffle className="w-4 h-4" />
+                <RefreshCw className="w-4 h-4" />
               </button>
 
               <button onClick={openSuggestionModal} title="Suggest a word" className="glass-strong p-2 rounded-xl text-amber-400 flex items-center justify-center">
@@ -1346,9 +1362,53 @@ export default function GameScreen() {
 
                     return (
                       <div key={teamIndex} className="glass rounded-lg p-4">
-                        <h5 className={`font-semibold mb-2 text-sm ${teamColor}`}>
-                          {team.name}
-                        </h5>
+                        <div className="flex items-center justify-between mb-2">
+                          {editingTeamIndex === teamIndex ? (
+                            <div className="flex items-center gap-2 w-full">
+                              <input
+                                autoFocus
+                                onFocus={(e) => (e.target as HTMLInputElement).select()}
+                                className={`w-full px-3 py-1 rounded-lg bg-white/5 outline-none text-sm ${teamColor}`}
+                                value={editingTeamName}
+                                onChange={(e) => setEditingTeamName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault()
+                                    handleSaveEdit(teamIndex)
+                                  } else if (e.key === 'Escape') {
+                                    setEditingTeamIndex(null)
+                                    setEditingTeamName('')
+                                  }
+                                }}
+                                placeholder={`Team ${teamIndex + 1}`}
+                              />
+                              <button
+                                onClick={() => handleSaveEdit(teamIndex)}
+                                className="px-3 py-1 glass-strong rounded-lg text-sm text-green-300"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }}
+                                className="px-3 py-1 glass rounded-lg text-sm text-gray-300"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <h5 className={`font-semibold mb-0 text-sm ${teamColor}`}>{team.name}</h5>
+                          )}
+
+                          {isAdmin && editingTeamIndex !== teamIndex && (
+                            <button
+                              onClick={() => { setEditingTeamIndex(teamIndex); setEditingTeamName(team.name) }}
+                              title="Edit team name"
+                              className="ml-3 p-1 rounded-md hover:bg-white/5"
+                            >
+                              <Edit3 className="w-4 h-4 text-gray-300" />
+                            </button>
+                          )}
+                        </div>
                         <div className="space-y-2">
                           {team.players.map((player, playerIndex) => {
                             const isPlayerCoAdmin = coAdmins.includes(player)
@@ -1587,7 +1647,39 @@ export default function GameScreen() {
                 <div key={teamIndex} className={`glass-strong rounded-lg p-3 md:p-4 border border-${teamColor}-500/20`}>
                   <div className="flex items-center justify-between mb-2">
                     <div>
-                      <div className="text-xs md:text-sm text-gray-400 font-medium uppercase tracking-wide">{team.name}</div>
+                      <div className="text-xs md:text-sm text-gray-400 font-medium uppercase tracking-wide">
+                        {editingTeamIndex === teamIndex ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              autoFocus
+                              onFocus={(e) => (e.target as HTMLInputElement).select()}
+                              className={`px-2 py-1 rounded-lg bg-white/5 outline-none text-xs ${teamColor}`}
+                              value={editingTeamName}
+                              onChange={(e) => setEditingTeamName(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') { e.preventDefault(); handleSaveEdit(teamIndex) }
+                                else if (e.key === 'Escape') { setEditingTeamIndex(null); setEditingTeamName('') }
+                              }}
+                              placeholder={`Team ${teamIndex + 1}`}
+                            />
+                            <button onClick={() => handleSaveEdit(teamIndex)} className="px-2 py-1 glass-strong rounded-lg text-xs text-green-300">Save</button>
+                            <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="px-2 py-1 glass rounded-lg text-xs text-gray-300">Cancel</button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <div>{team.name}</div>
+                            {isAdmin && (
+                              <button
+                                title="Edit team name"
+                                onClick={() => { setEditingTeamIndex(teamIndex); setEditingTeamName(team.name) }}
+                                className="ml-1 p-1 rounded-md hover:bg-white/5"
+                              >
+                                <Edit3 className="w-4 h-4 text-gray-300" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       <div className={`text-2xl md:text-3xl font-bold text-${teamColor}-400 mt-1`}>
                         {team.score}
                       </div>

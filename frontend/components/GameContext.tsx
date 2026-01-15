@@ -9,6 +9,7 @@ interface Player {
   id: string
   name: string
   team: number | null
+  showInWaiting?: boolean
 }
 
 interface WordObject {
@@ -80,6 +81,7 @@ interface GameContextType {
   playAgainProcessing: boolean
   gamesPlayed: number
   playAgainDefaulted: boolean
+  localPlayerPlayAgain: () => void
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined)
@@ -312,6 +314,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data.room.teamCount) {
         setLobbyTeamCount(data.room.teamCount)
       }
+      // Reset gameState team names for a newly created room so previous room names don't persist
+      const newTeamCount = data.room.teamCount || 2
+      const resetTeams = Array.from({ length: newTeamCount }).map((_, i) => ({ name: `Team ${i + 1}`, players: [], score: 0 }))
+      setGameState((prev) => ({
+        ...prev,
+        teams: resetTeams,
+        teamCount: newTeamCount
+      } as any))
       // Set games played counter
       if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
       // Set team stats
@@ -536,7 +546,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     newSocket.on('game-started', (data) => {
       console.log(`🎮 Game started! Socket ID: ${newSocket.id}`)
-      setGameState(data.gameState)
+      // If server provided persisted teamNames, merge them into gameState before setting
+      if (data?.room?.teamNames && data.gameState && Array.isArray(data.gameState.teams)) {
+        const merged = { ...data.gameState }
+        merged.teams = merged.teams.map((t: any, idx: number) => ({ ...t, name: data.room.teamNames[idx] || t.name }))
+        setGameState(merged)
+      } else {
+        setGameState(data.gameState)
+      }
       // If server provided room/player info, sync admin/host state immediately
       if (data.room) {
         if (data.room.players) setPlayers(data.room.players)
@@ -590,8 +607,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setPlayers(data.room.players || [])
 
         const teamsPlayers: string[][] = data.teamsPlayers || []
+        const teamNames: string[] = data.teamNames || (data.room && (data.room.teamNames || data.room.gameState?.teams?.map((t: any) => t.name))) || []
         const teams = teamsPlayers.map((players: string[], idx: number) => ({
-          name: `Team ${idx + 1}`,
+          name: teamNames[idx] || `Team ${idx + 1}`,
           players: players,
           score: 0
         }))
@@ -612,8 +630,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         }
 
         setGameState(newGameState as any)
-        // Default the lobby team selector to 2 teams after play-again
-        setLobbyTeamCount(2)
+        // Restore the lobby team selector to the preserved team count after play-again
+        setLobbyTeamCount(teams.length)
         // Mark that we intentionally defaulted the lobby selector after play-again
         setPlayAgainDefaulted(true)
         setTimeout(() => setPlayAgainDefaulted(false), 3000)
@@ -634,6 +652,47 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     newSocket.on('game-state-updated', (data) => {
       setGameState(data.gameState)
+    })
+
+    // A player requested an individual play-again; update players list and move requesting client to lobby
+    newSocket.on('player-play-again', (data) => {
+      if (!data) return
+      const { playerId, playerName, room } = data as any
+      if (room) {
+        if (room.players) setPlayers(room.players)
+        if (room.teamStats) setTeamStats(room.teamStats)
+        if (room.gamesPlayed !== undefined) setGamesPlayed(room.gamesPlayed)
+
+        // Sync host/admin state if server reassigned host
+        const isNowHost = room.host === newSocket.id
+        setIsHost(isNowHost)
+        setIsAdmin(isNowHost || (room.coAdmins && room.coAdmins.includes(newSocket.id)))
+      }
+
+      // If the event concerns this client, move them to lobby and clear their local team
+      if (newSocket.id === playerId) {
+        setMyTeam(null)
+        setCurrentScreen('lobby')
+      }
+    })
+
+    // Listen for lightweight team name updates (lobby edits)
+    newSocket.on('team-name-updated', (payload) => {
+      if (!payload) return
+      const { teamIndex, newName, gameState, room } = payload as any
+      if (gameState) {
+        setGameState(gameState)
+      } else {
+        setGameState((prev) => {
+          if (!prev) return prev
+          const teams = Array.isArray(prev.teams) ? [...prev.teams] : []
+          if (typeof teamIndex === 'number' && teams[teamIndex]) {
+            teams[teamIndex] = { ...teams[teamIndex], name: newName }
+          }
+          return { ...prev, teams }
+        })
+      }
+      if (room && room.teamStats) setTeamStats(room.teamStats)
     })
 
     newSocket.on('word-guessed-sync', (data) => {
@@ -753,8 +812,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
     })
 
     newSocket.on('team-switching-locked', (data) => {
-      setTeamSwitchingLocked(data.locked)
-      const message = data.locked ? 'Team switching has been locked by the host' : 'Team switching has been unlocked'
+      // Defensive: server may emit without payload (or client may receive undefined)
+      const locked = data?.locked === true
+      setTeamSwitchingLocked(locked)
+      const message = locked ? 'Team switching has been locked by the host' : 'Team switching has been unlocked'
       setNotification({ message, type: 'info' })
       setTimeout(() => setNotification(null), 3000)
     })
@@ -773,7 +834,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setNotification({ message: msg || 'An error occurred', type: 'warning' })
       setTimeout(() => setNotification(null), 3000)
 
-      if (/room not found|room no longer exists|room does not exist|Room not found/i.test(msg)) {
+      const isRoomNotFound = /room not found|room no longer exists|room does not exist|Room not found/i.test(msg)
+      if (isRoomNotFound) {
         // Clear stored session and local state
         localStorage.removeItem('taboo_room_code')
         localStorage.removeItem('taboo_player_name')
@@ -786,7 +848,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
         try { router.push('/') } catch (e) { }
       }
-      console.error('Socket error:', msg)
+      // Known, user-facing socket errors (like Room not found) are warnings, not internal errors
+      if (isRoomNotFound) {
+        console.warn('Socket warning:', msg)
+      } else {
+        console.error('Socket error:', msg)
+      }
     })
 
     setSocket(newSocket)
@@ -836,14 +903,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const startGame = (teamCount: number = 2) => {
     if (!isHost) return
 
-    // Build teams array based on teamCount
-    const teams: Array<{ name: string; players: string[]; score: number }> = [
-      { name: 'Team 1', players: players.filter(p => p.team === 0).map(p => p.name), score: 0 },
-      { name: 'Team 2', players: players.filter(p => p.team === 1).map(p => p.name), score: 0 }
-    ];
-
-    if (teamCount === 3) {
-      teams.push({ name: 'Team 3', players: players.filter(p => p.team === 2).map(p => p.name), score: 0 });
+    // Build teams array based on teamCount, preserving any custom team names in current gameState
+    const teams: Array<{ name: string; players: string[]; score: number }> = []
+    for (let i = 0; i < teamCount; i++) {
+      const name = gameState?.teams?.[i]?.name || `Team ${i + 1}`
+      const teamPlayers = players.filter(p => p.team === i).map(p => p.name)
+      teams.push({ name, players: teamPlayers, score: 0 })
     }
 
     // Reset game state to initial values for a fresh game
@@ -905,6 +970,18 @@ export function GameProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // Optimistic local update for an individual Play Again action
+  const localPlayerPlayAgain = () => {
+    try {
+      // Update players array locally so current client appears in waiting list immediately
+      setPlayers((prev) => prev.map((p) => (p.id === socket?.id ? { ...p, team: null, showInWaiting: true } : p)))
+      setMyTeam(null)
+      setCurrentScreen('lobby')
+    } catch (e) {
+      console.error('localPlayerPlayAgain error', e)
+    }
+  }
+
   return (
     <GameContext.Provider
       value={{
@@ -937,6 +1014,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         playAgainProcessing,
         gamesPlayed,
         playAgainDefaulted,
+        localPlayerPlayAgain,
         teamStats
       }}
     >

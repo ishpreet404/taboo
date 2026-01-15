@@ -200,6 +200,15 @@ async function handleRoomClosure(room, roomCode, reason = "Room closed") {
 		await sendSuggestionsToGoogleSheets(suggestionsToSend);
 		room.suggestedWords = [];
 	}
+
+	// Clear any persisted team name overrides so closed rooms don't leak names to new rooms
+	try {
+		if (room && room.teamNames) {
+			delete room.teamNames;
+		}
+	} catch (e) {
+		console.warn(`Failed to clear teamNames for room ${roomCode}:`, e);
+	}
 }
 
 // Helper function to check if a socket is admin (host or co-admin)
@@ -1445,6 +1454,15 @@ io.on("connection", (socket) => {
 				confirmedTaboosByTeam: {}, // Track taboo point deductions per team: { teamIndex: totalPoints }
 			};
 
+			// If room.teamNames exists (persisted from lobby edits), apply them to the new game state teams
+			if (room.teamNames && Array.isArray(room.teamNames) && Array.isArray(room.gameState.teams)) {
+				for (let i = 0; i < room.gameState.teams.length; i++) {
+					if (room.teamNames[i]) {
+						room.gameState.teams[i].name = room.teamNames[i]
+					}
+				}
+			}
+
 			// Reset used words for the new game
 			room.usedWordIndices = new Set();
 			room.wordPools = null; // Reset word pools
@@ -1459,7 +1477,7 @@ io.on("connection", (socket) => {
 
 			// Ensure stats array sizes match team count before starting
 			ensureTeamStats(room);
-			io.to(roomCode).emit("game-started", { gameState: room.gameState, room: { players: room.players, host: room.host, coAdmins: room.coAdmins, teamStats: room.teamStats, gamesPlayed: room.gamesPlayed } });
+			io.to(roomCode).emit("game-started", { gameState: room.gameState, room: { players: room.players, host: room.host, coAdmins: room.coAdmins, teamStats: room.teamStats, gamesPlayed: room.gamesPlayed, teamNames: room.teamNames } });
 			console.log(`Game started in room: ${roomCode} with ${teamCount} teams`);
 		}
 	});
@@ -2332,6 +2350,18 @@ io.on("connection", (socket) => {
 					// Update per-team stats then emit final state including room stats
 					updateStatsOnGameEnd(room);
 					io.to(roomCode).emit("game-over", { gameState: gs, room });
+					// Clear player team assignments immediately after game end so lobby shows empty teams
+					try {
+						for (const p of room.players) {
+							p.team = null
+							// Hide players from waiting list until they individually opt back in
+							p.showInWaiting = false
+						}
+						room.started = false
+						io.to(roomCode).emit('team-updated', { room })
+					} catch (e) {
+						console.error('Error clearing teams after natural game-over:', e)
+					}
 				});
 				return;
 			}
@@ -2471,8 +2501,18 @@ io.on("connection", (socket) => {
 										message: "All players left. Game ended.",
 										room,
 									});
-									room.gameState = null;
-									room.started = false;
+									// Clear player team assignments after game end
+									try {
+										for (const p of room.players) {
+											p.team = null
+											p.showInWaiting = false
+										}
+										room.gameState = null;
+										room.started = false;
+										io.to(roomCode).emit('team-updated', { room })
+									} catch (e) {
+										console.error('Error clearing teams after all-players-left game-over:', e)
+									}
 								});
 							} else {
 								const otherTeamIndex = currentTeamIndex === 0 ? 1 : 0;
@@ -2751,12 +2791,18 @@ io.on("connection", (socket) => {
 					message: "Game ended by host",
 					room,
 				});
-
-
-
-				// Clear game state
-				room.gameState = null;
-				room.started = false;
+				// Clear player team assignments after admin ended the game
+				try {
+					for (const p of room.players) {
+						p.team = null
+						p.showInWaiting = false
+					}
+					room.gameState = null;
+					room.started = false;
+					io.to(roomCode).emit('team-updated', { room })
+				} catch (e) {
+					console.error('Error clearing teams after admin-end-game:', e)
+				}
 				console.log(`Host ended game in room ${roomCode}`);
 			});
 		}
@@ -2786,8 +2832,18 @@ io.on("connection", (socket) => {
 							message: "Maximum rounds reached",
 							room,
 						});
-						room.gameState = null;
-						room.started = false;
+						// Clear player team assignments after game end due to max rounds
+						try {
+							for (const p of room.players) {
+								p.team = null
+								p.showInWaiting = false
+							}
+							room.gameState = null
+							room.started = false
+							io.to(roomCode).emit('team-updated', { room })
+						} catch (e) {
+							console.error('Error clearing teams after max-rounds game end (admin-skip-turn):', e)
+						}
 					});
 					return;
 				}
@@ -2974,91 +3030,86 @@ io.on("connection", (socket) => {
 		}
 	});
 
-	// Chat message handler
-
-	// Admin: Play again (reset everything except team membership and room)
-	socket.on('admin-play-again', async (data) => {
-		const { roomCode } = data || {};
+	// Admin: Rename team (host or co-admin)
+	socket.on('rename-team', (data) => {
+		const { roomCode, teamIndex, newName } = data || {};
 		const room = gameRooms.get(roomCode);
 		if (!room) return;
 
 		// Only allow host or co-admin
 		if (!isAdmin(room, socket.id)) {
-			console.log(`Unauthorized play-again attempt in room ${roomCode} by ${socket.id}`);
+			console.log(`Unauthorized rename-team attempt in room ${roomCode} by ${socket.id}`);
 			return;
 		}
 
-		// Notify clients that processing has started
-		io.to(roomCode).emit('play-again-processing', { message: 'Finalizing game data, preparing next round...' });
-
-		// Flush feedback and suggestions to Google Sheets (if configured)
-		try {
-			await handleRoomClosure(room, roomCode, 'Play again flush');
-			console.log(`Flushed feedback/suggestions for room ${roomCode} before play-again`);
-		} catch (err) {
-			console.error(`Error flushing feedback for room ${roomCode}:`, err);
+		// If gameState exists, update team name there
+		if (room.gameState && Array.isArray(room.gameState.teams) && room.gameState.teams[teamIndex]) {
+			room.gameState.teams[teamIndex].name = (newName || `Team ${teamIndex + 1}`).toString();
+			// Also persist to room.teamNames so lobby retains name after play-again
+			room.teamNames = room.teamNames || [];
+			room.teamNames[teamIndex] = room.gameState.teams[teamIndex].name;
+			// Broadcast updated game state to all clients for immediate sync
+			io.to(roomCode).emit('game-state-updated', { gameState: room.gameState, room });
+			console.log(`Team ${teamIndex} renamed to "${newName}" in room ${roomCode} (game running)`);
+			return;
 		}
 
-		// Capture current team membership before clearing
-		let teamsPlayers = [];
-		if (room.gameState && room.gameState.teams && room.gameState.teams.length > 0) {
-			teamsPlayers = room.gameState.teams.map(t => Array.isArray(t.players) ? [...t.players] : []);
-		} else {
-			// Derive from room.players with their .team assignments
-			const teamMap = {};
-			for (const p of room.players) {
-				const teamIdx = (p.team !== null && p.team !== undefined) ? p.team : 0;
-				if (!teamMap[teamIdx]) teamMap[teamIdx] = [];
-				teamMap[teamIdx].push(p.name);
-			}
-			const keys = Object.keys(teamMap).map(k => parseInt(k, 10)).sort((a, b) => a - b);
-			teamsPlayers = keys.map(k => teamMap[k]);
-		}
+		// If no gameState (lobby), emit a lightweight team-name update so clients can update local UI
+		// Persist to room.teamNames so play-again preserves the name
+		room.teamNames = room.teamNames || [];
+		room.teamNames[teamIndex] = (newName || `Team ${teamIndex + 1}`).toString();
+		io.to(roomCode).emit('team-name-updated', { teamIndex, newName, room: { teamStats: room.teamStats, teamNames: room.teamNames } });
+		console.log(`Team ${teamIndex} renamed to "${newName}" in room ${roomCode} (lobby)`);
+	});
 
-		// Wipe game-related state but preserve teams and player-team mapping
-		room.started = false;
-		room.gameState = null;
-		room.roundHistory = [];
-		room.wordFeedback = [];
-		room.suggestedWords = [];
+	// Chat message handler
 
-		// Clear word pools / used indices / pre-generated pools
-		room.wordPools = null;
-		room.usedWordIndices = new Set();
-		room.teamWordBatches = {};
-		room.teamBonusPools = {};
-		room.teamWordStats = {};
-		room.teamRoundIndex = {};
-		room.teamBonusIndex = {};
-		room.gameWordPool = null;
+	// Note: admin-play-again removed — individual players should use 'player-play-again'
 
-		// Ensure room.players reflect the same team grouping
-		for (const p of room.players) {
-			let found = false;
-			for (let ti = 0; ti < teamsPlayers.length; ti++) {
-				if (teamsPlayers[ti].includes(p.name)) {
-					p.team = ti;
-					found = true;
-					break;
+	// Player: Play again individually (move this player to lobby waiting list)
+	socket.on('player-play-again', (data) => {
+		const { roomCode } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room) return
+
+		// Find the player in the room
+		const player = room.players.find(p => p.id === socket.id)
+		if (!player) return
+
+		// Remove player from any gameState team lists if gameState exists
+		if (room.gameState && Array.isArray(room.gameState.teams)) {
+			for (const t of room.gameState.teams) {
+				if (Array.isArray(t.players)) {
+					const idx = t.players.indexOf(player.name)
+					if (idx !== -1) t.players.splice(idx, 1)
 				}
 			}
-			if (!found) p.team = 0;
 		}
 
-		room.teamCount = Math.max(2, teamsPlayers.length || 2);
+		// Set player's team to null (waiting list)
+		player.team = null
+		// Mark that this player has opted into the waiting list (visible to others)
+		player.showInWaiting = true
 
-		// Increment gamesPlayed counter for this room
-		room.gamesPlayed = (room.gamesPlayed || 0) + 1;
+		// If no one has been assigned as the play-again host yet, assign the first requester
+		if (!room.playAgainHostAssigned) {
+			room.host = socket.id
+			room.playAgainHostAssigned = true
+			console.log(`Assigned new host ${player.name} (${socket.id}) for room ${roomCode} via player-play-again`)
+		}
 
-		// Broadcast to all players that room is reset and ready to play again
-		io.to(roomCode).emit('play-again-ready', {
-			room: room,
-			teamsPlayers: teamsPlayers,
-			gamesPlayed: room.gamesPlayed
-		});
-
-		console.log(`Admin requested play-again in room ${roomCode}. Cleared game state, preserving teams.`);
-	});
+		// Broadcast updated players/room so all clients see the waiting list change
+		try {
+			io.to(roomCode).emit('player-play-again', { playerId: socket.id, playerName: player.name, room })
+			// Also emit a team-updated so clients refresh waiting lists in a consistent place
+			io.to(roomCode).emit('team-updated', { room })
+			// Also emit a game-state update if present to keep UI in sync
+			if (room.gameState) io.to(roomCode).emit('game-state-updated', { gameState: room.gameState, room })
+			console.log(`Player ${player.name} (${socket.id}) moved to lobby waiting in room ${roomCode}`)
+		} catch (err) {
+			console.error('Error broadcasting player-play-again:', err)
+		}
+	})
 
 	socket.on("chat-message", (data) => {
 		const { roomCode, message, playerName } = data;
@@ -3183,6 +3234,7 @@ io.on("connection", (socket) => {
 										message: "All players left. Game ended.",
 										room,
 									});
+									// Preserve player.team assignments; just mark game state cleared
 									room.gameState = null;
 									room.started = false;
 								});

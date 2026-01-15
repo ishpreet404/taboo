@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { AlertTriangle, Home, Medal, Star, Trophy } from 'lucide-react'
+import { AlertTriangle, Home, Medal, RotateCw, Star, Trophy } from 'lucide-react'
 import { useGame } from './GameContext'
 
 interface PlayerContribution {
@@ -14,7 +14,7 @@ interface PlayerContribution {
 }
 
 export default function GameOverScreen() {
-  const { gameState, setCurrentScreen, leaveGame, socket, roomCode, isAdmin, playAgainProcessing } = useGame()
+  const { gameState, setCurrentScreen, leaveGame, socket, roomCode, isAdmin, playAgainProcessing, setNotification, localPlayerPlayAgain } = useGame()
 
   // Get taboo deductions per team
   const tabooDeductionsByTeam = gameState.confirmedTaboosByTeam || {}
@@ -222,21 +222,24 @@ export default function GameOverScreen() {
         className="text-center"
       >
         <div className="flex items-center justify-center gap-4">
-          {isAdmin && (
-            <button
-              onClick={() => {
-                try {
-                  socket?.emit('admin-play-again', { roomCode })
-                } catch (e) {
-                  console.error('Failed to emit admin-play-again', e)
-                }
-              }}
-              disabled={playAgainProcessing}
-              className={`px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform ${playAgainProcessing ? 'opacity-60 cursor-not-allowed' : 'hover:scale-105'} flex items-center gap-3`}
-            >
-              ▶ Play Again
-            </button>
-          )}
+          {/* Individual Play Again available to all players */}
+          <button
+            onClick={() => {
+              try {
+                socket?.emit('player-play-again', { roomCode })
+                // Optimistically update local UI so the player shows up in the waiting list immediately
+                localPlayerPlayAgain()
+              } catch (e) {
+                console.error('Failed to emit player-play-again', e)
+              }
+            }}
+            className="px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform hover:scale-105 flex items-center gap-3"
+          >
+            <RotateCw className="w-6 h-6" />
+            <span>Play Again</span>
+          </button>
+
+          {/* admin-play-again removed: individual Play Again handles per-player flow and assigns first requester as host */}
 
           <button
             onClick={() => {
