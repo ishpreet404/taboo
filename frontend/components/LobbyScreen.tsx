@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function LobbyScreen() {
-  const { roomCode, players, isHost, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings } = useGame()
+  const { roomCode, players, isHost, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted } = useGame()
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
 
   // Debug: Log lobbyTeamCount changes
@@ -88,24 +88,33 @@ export default function LobbyScreen() {
           <div className="mt-4 flex items-center justify-center gap-3">
             <span className="text-sm text-gray-400">Number of Teams:</span>
             <div className="flex gap-2">
-              <button
-                onClick={() => handleTeamCountChange(2)}
-                className={`px-4 py-2 rounded-lg font-semibold transition-all ${lobbyTeamCount === 2
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-white/10 text-gray-400 hover:bg-white/20'
-                  }`}
-              >
-                2 Teams
-              </button>
-              <button
-                onClick={() => handleTeamCountChange(3)}
-                className={`px-4 py-2 rounded-lg font-semibold transition-all ${lobbyTeamCount === 3
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-white/10 text-gray-400 hover:bg-white/20'
-                  }`}
-              >
-                3 Teams
-              </button>
+              {/* Determine active visual based on play-again default or actual lobby count */}
+              {/** If `playAgainDefaulted` is true, show 2 as active briefly */}
+              {(() => {
+                const activeCount = playAgainDefaulted ? 2 : lobbyTeamCount
+                return (
+                  <>
+                    <button
+                      onClick={() => handleTeamCountChange(2)}
+                      className={`px-4 py-2 rounded-lg font-semibold transition-all ${activeCount === 2
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                        }`}
+                    >
+                      2 Teams
+                    </button>
+                    <button
+                      onClick={() => handleTeamCountChange(3)}
+                      className={`px-4 py-2 rounded-lg font-semibold transition-all ${activeCount === 3
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                        }`}
+                    >
+                      3 Teams
+                    </button>
+                  </>
+                )
+              })()}
             </div>
           </div>
         )}

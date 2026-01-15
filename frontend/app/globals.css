@@ -107,3 +107,44 @@ body {
   backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
+
+/* Diagonal glare animation for badges */
+.glare-badge {
+  position: relative;
+  overflow: hidden;
+}
+
+.glare-badge::after {
+  content: "";
+  position: absolute;
+  /* move the start slightly lower to better center the glare */
+  left: -45%;
+  top: 76%;
+  width: 200%;
+  height: 200%;
+  /* a narrow bright band rotated to align with diagonal */
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 20%, rgba(255, 255, 255, 0.45) 45%, rgba(255, 255, 255, 0.8) 50%, rgba(255, 255, 255, 0.45) 55%, rgba(255, 255, 255, 0) 80%);
+  mix-blend-mode: overlay;
+  opacity: 0.9;
+  pointer-events: none;
+  transform: rotate(-45deg);
+  animation: glare 3s linear infinite;
+}
+
+@keyframes glare {
+  0% {
+    transform: translate(-120%, 10%) rotate(-45deg);
+  }
+
+  20% {
+    transform: translate(-120%, 10%) rotate(-45deg);
+  }
+
+  60% {
+    transform: translate(120%, -140%) rotate(-45deg);
+  }
+
+  100% {
+    transform: translate(120%, -140%) rotate(-45deg);
+  }
+}

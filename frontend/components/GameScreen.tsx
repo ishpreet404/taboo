@@ -1,11 +1,11 @@
 'use client'
 
-import { Clock, Copy, Info, Lock, LogOut, MessageSquare, Settings, Shield, Shuffle, SkipForward, Trophy, Unlock, UserCheck, Users, UserX, Zap } from 'lucide-react'
+import { Clock, Copy, Handshake, Info, Lock, LogOut, MessageSquare, Settings, Shield, Shuffle, SkipForward, Trophy as TrophyIcon, Unlock, UserCheck, Users, UserX, X, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
@@ -49,7 +49,7 @@ export default function GameScreen() {
   const [suggestionText, setSuggestionText] = useState('')
   const [suggestionChecking, setSuggestionChecking] = useState(false)
   const [suggestionCheckResult, setSuggestionCheckResult] = useState<{ exists: boolean; word: string } | null>(null)
-  const [suggestionDifficulty, setSuggestionDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium')
+  const [suggestionDifficulty, setSuggestionDifficulty] = useState<'easy' | 'medium' | 'hard' | null>(null)
   const [suggestionSubmitting, setSuggestionSubmitting] = useState(false)
   const [suggestionSubmitted, setSuggestionSubmitted] = useState(false)
 
@@ -1047,6 +1047,7 @@ export default function GameScreen() {
     setSuggestionCheckResult(null)
     setSuggestionSubmitting(false)
     setSuggestionSubmitted(false)
+    setSuggestionDifficulty(null)
   }
 
   const closeSuggestionModal = () => {
@@ -1069,7 +1070,7 @@ export default function GameScreen() {
       return
     }
     setSuggestionSubmitting(true)
-    socket?.emit('suggest-word', { roomCode, playerName, word: suggestionText.trim(), difficulty: suggestionDifficulty, timestamp: new Date().toISOString() })
+    socket?.emit('suggest-word', { roomCode, playerName, word: suggestionText.trim(), difficulty: suggestionDifficulty ?? undefined, timestamp: new Date().toISOString() })
   }
 
   useEffect(() => {
@@ -1160,7 +1161,7 @@ export default function GameScreen() {
         <div className="fixed top-0 left-0 right-0 z-40 pb-4 pt-4 px-4">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
             {/* Left - Room Code and Change Team */}
-            <div className="flex gap-2">
+            <div className="hidden sm:flex gap-2">
               <div className="glass-strong rounded-xl px-3 sm:px-4 py-2.5 flex items-center gap-2 border border-cyan-500/30 shadow-lg h-10 sm:h-11">
                 <span className="text-gray-400 text-xs sm:text-sm">Room Code:</span>
                 <span className="text-sm sm:text-base font-mono font-bold tracking-wider text-cyan-300">{roomCode}</span>
@@ -1186,25 +1187,72 @@ export default function GameScreen() {
                     ? 'Cannot change teams during an active turn'
                     : teamSwitchingLocked
                       ? 'Team switching is locked by the host'
-                      : 'Switch to opposite team'
+                      : 'Shuffle teams / switch team assignment'
                 }
               >
-                <UserCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <Shuffle className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 <span className="hidden sm:inline">Change Team</span>
               </button>
-              {/* Suggestion Button - open suggestion modal */}
+              {/* Suggestion Button - open suggestion modal with gamesPlayed badge in its own container */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={openSuggestionModal}
+                  title="Suggest a word"
+                  className="px-3 sm:px-4 py-2.5 glass-strong rounded-xl transition-colors flex items-center gap-2 text-sm font-medium border shadow-lg h-10 sm:h-11 text-amber-400 hover:bg-amber-500/10 border-amber-500/20"
+                >
+                  <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">Suggest</span>
+                </button>
+                <div className="h-10 sm:h-11 px-3 sm:px-4 flex items-center gap-2 glass-strong rounded-xl border border-gray-600/20 text-sm">
+                  <span className="text-[18px] sm:text-[20px] text-orange-400">⚔️</span>
+                  <span className="ml-1 text-sm text-orange-400">{gamesPlayed}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Mobile compact header (icons only) */}
+            <div className="flex sm:hidden items-center justify-evenly gap-2 px-2 w-full">
+              <div className="glass-strong rounded-xl px-2 py-2 flex items-center gap-1 border shadow-lg h-10 min-w-[56px] justify-center">
+                <span className="text-xs font-mono font-bold tracking-wider">{roomCode}</span>
+                <button onClick={copyRoomCode} className="p-1 hover:bg-white/10 rounded-lg transition-colors" title="Copy room code">
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+
               <button
-                onClick={openSuggestionModal}
-                title="Suggest a word"
-                className="px-3 sm:px-4 py-2.5 glass-strong rounded-xl transition-colors flex items-center gap-2 text-sm font-medium border shadow-lg h-10 sm:h-11 text-amber-400 hover:bg-amber-500/10 border-amber-500/20"
+                onClick={handleChangeTeam}
+                disabled={turnActive || teamSwitchingLocked}
+                className={`p-2 glass-strong rounded-xl transition-colors flex items-center justify-center h-10 ${turnActive || teamSwitchingLocked
+                  ? 'border border-gray-500/30 text-gray-500 cursor-not-allowed opacity-50'
+                  : 'border border-green-500/30 text-green-400 hover:bg-green-500/20 hover:border-green-500/50'
+                  }`}
+                title="Change Team"
               >
-                <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                <span className="hidden sm:inline">Suggest</span>
+                <Shuffle className="w-4 h-4" />
+              </button>
+
+              <button onClick={openSuggestionModal} title="Suggest a word" className="glass-strong p-2 rounded-xl text-amber-400 flex items-center justify-center">
+                <MessageSquare className="w-4 h-4" />
+              </button>
+
+              <div className="glass-strong px-3 py-2 rounded-xl flex items-center justify-center gap-1 min-w-[56px] h-10">
+                <span className="text-[16px] text-orange-400">⚔️</span>
+                <span className="text-xs text-orange-400">{gamesPlayed}</span>
+              </div>
+
+              {isAdmin && (
+                <button onClick={() => setShowAdminPanel(true)} className="p-2 glass-strong rounded-xl hover:bg-purple-500/20 transition-colors flex items-center justify-center text-purple-400 border border-purple-500/30 hover:border-purple-500/50 shadow-lg h-10" title="Admin Panel">
+                  <Settings className="w-4 h-4" />
+                </button>
+              )}
+
+              <button onClick={() => setShowLeaveConfirm(true)} className="p-2 glass-strong rounded-xl flex items-center justify-center text-red-400 border border-red-500/30 hover:bg-red-500/10 shadow-lg h-10" title="Leave Game">
+                <LogOut className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Right - Control Buttons */}
-            <div className="flex gap-2">
+            {/* Right - Control Buttons (desktop) */}
+            <div className="hidden sm:flex gap-2">
               {/* Admin Panel Button (Host or Co-Admin) */}
               {isAdmin && (
                 <button
@@ -1275,9 +1323,14 @@ export default function GameScreen() {
               className="glass-strong rounded-2xl p-6 md:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center gap-3 mb-6">
-                <Shield className="w-7 h-7 text-purple-400" />
-                <h3 className="text-2xl md:text-3xl font-bold">Admin Panel</h3>
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <Shield className="w-7 h-7 text-purple-400" />
+                  <h3 className="text-2xl md:text-3xl font-bold">Admin Panel</h3>
+                </div>
+                <button onClick={() => setShowAdminPanel(false)} className="p-2 glass-strong rounded-lg hover:bg-white/10 transition-colors flex items-center justify-center text-gray-300" title="Close Admin Panel">
+                  <X className="w-5 h-5" />
+                </button>
               </div>
 
               {/* Player Management Section */}
@@ -1311,9 +1364,14 @@ export default function GameScreen() {
                                       Describer
                                     </span>
                                   )}
-                                  {player === playerName && (
+                                  {player === playerName && isHost && (
                                     <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full">
                                       You (Host)
+                                    </span>
+                                  )}
+                                  {player === playerName && !isHost && isAdmin && (
+                                    <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full">
+                                      You (Co-admin)
                                     </span>
                                   )}
                                   {isPlayerCoAdmin && player !== playerName && (
@@ -1323,14 +1381,15 @@ export default function GameScreen() {
                                     </span>
                                   )}
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex flex-row items-center gap-1 justify-end">
                                   {/* Don't show make describer button if already the describer */}
                                   {gameState.currentDescriberIndex?.[teamIndex] !== playerIndex && (
                                     <button
                                       onClick={() => handleMakeDescriber(teamIndex, playerIndex)}
-                                      className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-yellow-500/20 transition-colors text-yellow-400 border border-yellow-500/30"
+                                      className="w-9 h-9 sm:w-auto sm:h-auto px-2 py-1 sm:px-3 text-xs glass rounded-lg hover:bg-yellow-500/20 transition-colors text-yellow-400 border border-yellow-500/30 flex items-center justify-center gap-1"
                                     >
-                                      Make Describer
+                                      <UserCheck className="w-3 h-3" />
+                                      <span className="hidden sm:inline">Make Describer</span>
                                     </button>
                                   )}
                                   {/* Host can toggle co-admin status for other players */}
@@ -1338,30 +1397,30 @@ export default function GameScreen() {
                                     <>
                                       <button
                                         onClick={() => handleToggleCoAdmin(player)}
-                                        className={`px-3 py-1.5 text-xs glass rounded-lg transition-colors flex items-center gap-1 ${isPlayerCoAdmin
+                                        className={`w-9 h-9 sm:w-auto sm:h-auto px-2 py-1 sm:px-3 text-xs glass rounded-lg transition-colors flex items-center justify-center gap-1 ${isPlayerCoAdmin
                                           ? 'bg-purple-500/30 text-purple-300 border border-purple-400/50'
                                           : 'hover:bg-purple-500/20 text-purple-400 border border-purple-500/30'
                                           }`}
                                         title={isPlayerCoAdmin ? 'Remove co-admin' : 'Make co-admin'}
                                       >
                                         <Shield className="w-3 h-3" />
-                                        {isPlayerCoAdmin ? 'Admin ✓' : 'Admin'}
+                                        <span className="hidden sm:inline">{isPlayerCoAdmin ? 'Admin ✓' : 'Admin'}</span>
                                       </button>
                                       <button
                                         onClick={() => handleKickPlayer(player, false)}
-                                        className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-orange-500/20 transition-colors text-orange-400 border border-orange-500/30 flex items-center gap-1"
+                                        className="w-9 h-9 sm:w-auto sm:h-auto px-2 py-1 sm:px-3 text-xs glass rounded-lg hover:bg-orange-500/20 transition-colors text-orange-400 border border-orange-500/30 flex items-center justify-center gap-1"
                                         title="Kick player (can rejoin)"
                                       >
                                         <UserX className="w-3 h-3" />
-                                        Kick
+                                        <span className="hidden sm:inline">Kick</span>
                                       </button>
                                       <button
                                         onClick={() => handleKickPlayer(player, true)}
-                                        className="px-3 py-1.5 text-xs glass rounded-lg hover:bg-red-500/20 transition-colors text-red-400 border border-red-500/30 flex items-center gap-1"
+                                        className="w-9 h-9 sm:w-auto sm:h-auto px-2 py-1 sm:px-3 text-xs glass rounded-lg hover:bg-red-500/20 transition-colors text-red-400 border border-red-500/30 flex items-center justify-center gap-1"
                                         title="Ban player (cannot rejoin)"
                                       >
                                         <UserX className="w-3 h-3" />
-                                        Ban
+                                        <span className="hidden sm:inline">Ban</span>
                                       </button>
                                     </>
                                   )}
@@ -1394,7 +1453,7 @@ export default function GameScreen() {
                     onClick={handleEndGame}
                     className="px-4 py-3 glass-strong rounded-lg hover:bg-red-500/20 transition-colors flex items-center justify-center gap-2 text-red-400 border border-red-500/30"
                   >
-                    <Trophy className="w-5 h-5" />
+                    <TrophyIcon className="w-5 h-5" />
                     End Game
                   </button>
                 </div>
@@ -1511,15 +1570,7 @@ export default function GameScreen() {
                 </div>
               </div>
 
-              {/* Close Button */}
-              <div className="flex justify-end">
-                <button
-                  onClick={() => setShowAdminPanel(false)}
-                  className="px-6 py-3 glass-strong hover:bg-white/10 border border-white/10 rounded-xl transition-colors font-semibold"
-                >
-                  Close
-                </button>
-              </div>
+
             </div>
           </div>
         )}
@@ -1541,7 +1592,26 @@ export default function GameScreen() {
                         {team.score}
                       </div>
                     </div>
-                    <Trophy className={`w-6 h-6 md:w-8 md:h-8 text-${teamColor}-400 opacity-50`} />
+                    <div className="flex items-center gap-3 text-gray-300">
+                      <div className="flex items-center gap-1 text-sm md:text-base">
+                        <TrophyIcon className={`w-5 h-5 md:w-6 md:h-6 text-yellow-300 opacity-80`} />
+                        <span className={`font-semibold text-${teamColor}-300`}>{teamStats?.wins?.[teamIndex] ?? 0}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-sm md:text-base">
+                        <Handshake className={`w-5 h-5 md:w-6 md:h-6 text-gray-300 opacity-80`} />
+                        <span className={`font-semibold text-${teamColor}-300`}>{teamStats?.ties?.[teamIndex] ?? 0}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-sm md:text-base">
+                        <XCircle className={`w-5 h-5 md:w-6 md:h-6 text-red-400 opacity-80`} />
+                        <span className={`font-semibold text-${teamColor}-300`}>{teamStats?.losses?.[teamIndex] ?? 0}</span>
+                      </div>
+                      {(teamStats?.streaks?.[teamIndex] ?? 0) > 1 && (
+                        <div className="glare-badge ml-2 px-2 py-0.5 bg-yellow-400/10 text-yellow-300 rounded-full text-xs font-semibold flex items-center gap-1 ring-1 ring-yellow-300/20">
+                          <span className="text-sm">🔥</span>
+                          <span className="text-xs font-semibold">{teamStats?.streaks?.[teamIndex]}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   {/* Team Players */}
                   <div className={`mt-2 pt-2 border-t border-${teamColor}-500/20`}>
@@ -2001,7 +2071,7 @@ export default function GameScreen() {
                       {guessedWords.length}
                     </div>
                     <div className="text-gray-400 text-xs sm:text-sm md:text-base flex items-center justify-center gap-0.5 sm:gap-1">
-                      <Trophy className="w-3 h-3 sm:w-4 sm:h-4 opacity-50" />
+                      <TrophyIcon className="w-3 h-3 sm:w-4 sm:h-4 opacity-50" />
                       Words
                     </div>
                   </div>

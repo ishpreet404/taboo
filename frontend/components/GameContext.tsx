@@ -1,6 +1,7 @@
 'use client'
 
 import { getDiscordUser, isDiscordActivity, setupDiscordSdk } from '@/lib/discordSdk'
+import { useRouter } from 'next/navigation'
 import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
 
@@ -65,6 +66,7 @@ interface GameContextType {
   lobbyTeamCount: number
   tabooReporting: boolean
   tabooVoting: boolean
+  teamStats: { wins: number[]; ties: number[]; losses: number[]; streaks: number[] }
   setTabooSettings: (reporting: boolean, voting: boolean) => void
   setNotification: (notification: Notification | null) => void
   setPlayerName: (name: string) => void
@@ -75,6 +77,9 @@ interface GameContextType {
   leaveGame: () => void
   setCurrentScreen: (screen: 'room' | 'lobby' | 'game' | 'gameover') => void
   submitWordFeedback: (word: string, feedback: string, difficulty: string) => void
+  playAgainProcessing: boolean
+  gamesPlayed: number
+  playAgainDefaulted: boolean
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined)
@@ -97,6 +102,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [tabooReporting, setTabooReporting] = useState(false) // Taboo reporting off by default
   const [tabooVoting, setTabooVoting] = useState(false) // Taboo voting off by default
   const wasKicked = useRef(false)
+  const router = useRouter()
+  const ignoreGameOverUntil = useRef<number>(0)
+  const [playAgainProcessing, setPlayAgainProcessing] = useState(false)
+  const [gamesPlayed, setGamesPlayed] = useState<number>(0)
+  const [playAgainDefaulted, setPlayAgainDefaulted] = useState(false)
+  const [teamStats, setTeamStats] = useState<{ wins: number[]; ties: number[]; losses: number[]; streaks: number[] }>({ wins: [0, 0], ties: [0, 0], losses: [0, 0], streaks: [0, 0] })
   const [gameState, setGameState] = useState<GameState>({
     teams: [
       { name: 'Team 1', players: [], score: 0 },
@@ -250,17 +261,41 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
       setNotification({ message: 'Reconnected to game!', type: 'success' })
       setTimeout(() => setNotification(null), 3000)
+      // Restore games played counter if provided
+      if (data?.gamesPlayed !== undefined) {
+        setGamesPlayed(data.gamesPlayed)
+      }
+      // Restore team stats if provided
+      if (data?.room?.teamStats) {
+        setTeamStats(data.room.teamStats)
+      }
     })
 
     // Handle failed reconnection (room no longer exists)
     newSocket.on('reconnect-failed', (data) => {
-      console.log('❌ Reconnection failed:', data.message)
+      console.log('❌ Reconnection failed:', data?.message)
       // Clear stored session
       localStorage.removeItem('taboo_room_code')
       localStorage.removeItem('taboo_player_name')
       setIsReconnecting(false) // Clear reconnecting state
-      setNotification({ message: data.message || 'Could not reconnect to room', type: 'warning' })
+
+      // Clear local room state
+      setRoomCode(null)
+      setPlayers([])
+      setIsHost(false)
+      setIsAdmin(false)
+      setMyTeam(null)
+      setCurrentScreen('room')
+
+      setNotification({ message: data?.message || 'Could not reconnect to room', type: 'warning' })
       setTimeout(() => setNotification(null), 4000)
+
+      // Redirect user to home to avoid being stuck on a stale screen
+      try {
+        router.push('/')
+      } catch (e) {
+        // router may be unavailable in some environments; ignore
+      }
     })
 
     newSocket.on('room-created', (data) => {
@@ -277,6 +312,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data.room.teamCount) {
         setLobbyTeamCount(data.room.teamCount)
       }
+      // Set games played counter
+      if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
+      // Set team stats
+      if (data.room?.teamStats) setTeamStats(data.room.teamStats)
       // Find this player's team assignment
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
@@ -299,6 +338,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data.teamCount) {
         setLobbyTeamCount(data.teamCount)
       }
+      // Set games played counter
+      if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
+      // Set team stats
+      if (data.room?.teamStats) setTeamStats(data.room.teamStats)
       // Set taboo settings from server
       if (data.tabooReporting !== undefined) {
         setTabooReporting(data.tabooReporting)
@@ -339,6 +382,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setRoomCode(data.roomCode)
       setPlayers(data.room.players)
       setGameState(data.gameState)
+      // Restore games played counter
+      if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
+      // Restore team stats
+      if (data.room?.teamStats) setTeamStats(data.room.teamStats)
       // Find player's team
       const player = data.room.players.find((p: any) => p.id === newSocket.id)
       if (player) {
@@ -421,6 +468,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       // Update isHost status for the new host
       const isNewHost = data.hostId === newSocket.id
       setIsHost(isNewHost)
+      // Ensure admin state follows host status (host is always admin)
+      setIsAdmin(isNewHost)
       console.log(`New host: ${data.newHost}`)
       if (isNewHost) {
         setNotification({ message: 'You are now the host of the room!', type: 'info' })
@@ -488,6 +537,15 @@ export function GameProvider({ children }: { children: ReactNode }) {
     newSocket.on('game-started', (data) => {
       console.log(`🎮 Game started! Socket ID: ${newSocket.id}`)
       setGameState(data.gameState)
+      // If server provided room/player info, sync admin/host state immediately
+      if (data.room) {
+        if (data.room.players) setPlayers(data.room.players)
+        if (data.room.teamStats) setTeamStats(data.room.teamStats)
+        if (data.room.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed)
+        const isNowHost = data.room.host === newSocket.id
+        setIsHost(isNowHost)
+        setIsAdmin(isNowHost || (data.room.coAdmins && data.room.coAdmins.includes(newSocket.id)))
+      }
       setCurrentScreen('game')
     })
 
@@ -497,6 +555,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setLobbyTeamCount(3)
       if (data.room) {
         setPlayers(data.room.players)
+        if (data.room.teamStats) setTeamStats(data.room.teamStats)
       }
       // Don't set notification here - let the game-state-updated handler do it
       // or handle notification display in the component that needs it
@@ -507,6 +566,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setGameState(data.gameState)
       setLobbyTeamCount(2)
       setPlayers(data.room.players)
+      if (data.room?.teamStats) setTeamStats(data.room.teamStats)
       // Update myTeam if I was on Team 3
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
@@ -515,6 +575,61 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
       // Don't set notification here - let the game-state-updated handler do it
       // or handle notification display in the component that needs it
+    })
+
+    // Handle play-again ready event from server: prepare lobby with same team composition
+    newSocket.on('play-again-ready', (data) => {
+      console.log('[PLAY-AGAIN] Room reset received:', data)
+      // Stop processing indicator
+      setPlayAgainProcessing(false)
+      if (data?.room) {
+        // Update games played counter if provided
+        if (data.gamesPlayed !== undefined) setGamesPlayed(data.gamesPlayed)
+        // Update team stats if present
+        if (data.room.teamStats) setTeamStats(data.room.teamStats)
+        setPlayers(data.room.players || [])
+
+        const teamsPlayers: string[][] = data.teamsPlayers || []
+        const teams = teamsPlayers.map((players: string[], idx: number) => ({
+          name: `Team ${idx + 1}`,
+          players: players,
+          score: 0
+        }))
+
+        const newGameState = {
+          teams,
+          teamCount: teams.length,
+          currentTeamIndex: 0,
+          currentDescriberIndex: Array(teams.length).fill(0),
+          round: 1,
+          maxRounds: 12,
+          turnTime: 60,
+          timeRemaining: 60,
+          currentWords: [],
+          guessedWords: [],
+          skippedWords: [],
+          playerContributions: {}
+        }
+
+        setGameState(newGameState as any)
+        // Default the lobby team selector to 2 teams after play-again
+        setLobbyTeamCount(2)
+        // Mark that we intentionally defaulted the lobby selector after play-again
+        setPlayAgainDefaulted(true)
+        setTimeout(() => setPlayAgainDefaulted(false), 3000)
+        setCurrentScreen('lobby')
+        // Prevent any late 'game-over' from overwriting this transition for a short window
+        ignoreGameOverUntil.current = Date.now() + 3000
+        setNotification({ message: 'Room reset. Ready to play again!', type: 'success' })
+        setTimeout(() => setNotification(null), 3000)
+      }
+    })
+
+    // Server notified that play-again processing has started (e.g., flushing feedback)
+    newSocket.on('play-again-processing', (data) => {
+      console.log('[PLAY-AGAIN] Processing started:', data)
+      setPlayAgainProcessing(true)
+      setNotification({ message: data?.message || 'Preparing new game...', type: 'info' })
     })
 
     newSocket.on('game-state-updated', (data) => {
@@ -552,9 +667,17 @@ export function GameProvider({ children }: { children: ReactNode }) {
     newSocket.on('game-over', (data) => {
       console.log('[GAME-OVER] Received data:', data)
       console.log('[GAME-OVER] confirmedTaboosByTeam:', data.gameState?.confirmedTaboosByTeam)
+      // If a play-again was just processed, ignore late game-over messages
+      if (Date.now() < (ignoreGameOverUntil.current || 0)) {
+        console.log('[GAME-OVER] Ignored due to recent play-again')
+        return
+      }
+
       // Only show game over screen if player wasn't kicked
       if (!wasKicked.current) {
         setGameState(data.gameState)
+        // Sync team stats if server included them
+        if (data.room?.teamStats) setTeamStats(data.room.teamStats)
         setCurrentScreen('gameover')
       }
     })
@@ -636,11 +759,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setTimeout(() => setNotification(null), 3000)
     })
 
-    newSocket.on('error', (data) => {
-      setNotification({ message: data.message, type: 'warning' })
-      setTimeout(() => setNotification(null), 3000)
-    })
-
     newSocket.on('describer-changed', (data) => {
       setGameState(data.gameState)
       if (data.message) {
@@ -649,9 +767,26 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
     })
 
+    // Consolidated error handler: show notification and redirect on room-not-found errors
     newSocket.on('error', (data) => {
-      console.error('Socket error:', data.message)
-      // Error handling can be improved with custom UI in the future
+      const msg = (data?.message || '').toString()
+      setNotification({ message: msg || 'An error occurred', type: 'warning' })
+      setTimeout(() => setNotification(null), 3000)
+
+      if (/room not found|room no longer exists|room does not exist|Room not found/i.test(msg)) {
+        // Clear stored session and local state
+        localStorage.removeItem('taboo_room_code')
+        localStorage.removeItem('taboo_player_name')
+        setRoomCode(null)
+        setPlayers([])
+        setIsHost(false)
+        setIsAdmin(false)
+        setMyTeam(null)
+        setCurrentScreen('room')
+
+        try { router.push('/') } catch (e) { }
+      }
+      console.error('Socket error:', msg)
     })
 
     setSocket(newSocket)
@@ -798,7 +933,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
         startGame,
         leaveGame,
         setCurrentScreen,
-        submitWordFeedback
+        submitWordFeedback,
+        playAgainProcessing,
+        gamesPlayed,
+        playAgainDefaulted,
+        teamStats
       }}
     >
       {children}

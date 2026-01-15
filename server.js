@@ -31,6 +31,64 @@ app.use(express.static("public"));
 // Game rooms storage
 const gameRooms = new Map();
 
+// Ensure team stats exist and have correct length for a room
+function ensureTeamStats(room) {
+	const teamCount = room.teamCount || 2;
+	if (!room.teamStats) {
+		room.teamStats = {
+			wins: Array(teamCount).fill(0),
+			ties: Array(teamCount).fill(0),
+			losses: Array(teamCount).fill(0),
+			streaks: Array(teamCount).fill(0),
+		};
+		return;
+	}
+	// Resize arrays if teamCount changed
+	['wins', 'ties', 'losses', 'streaks'].forEach((k) => {
+		if (!room.teamStats[k]) room.teamStats[k] = [];
+		while (room.teamStats[k].length < teamCount) room.teamStats[k].push(0);
+		if (room.teamStats[k].length > teamCount) room.teamStats[k] = room.teamStats[k].slice(0, teamCount);
+	});
+}
+
+// Update room.teamStats based on final gameState scores
+function updateStatsOnGameEnd(room) {
+	try {
+		if (!room || !room.gameState || !room.gameState.teams) return;
+		ensureTeamStats(room);
+		const scores = room.gameState.teams.map(t => (t.score || 0));
+		const maxScore = Math.max(...scores);
+		const winners = [];
+		scores.forEach((s, idx) => { if (s === maxScore) winners.push(idx); });
+
+		// If tie among multiple teams
+		if (winners.length > 1) {
+			// Increment tie counter for each winning team; increment loss for non-winners
+			scores.forEach((_, idx) => {
+				if (winners.includes(idx)) room.teamStats.ties[idx] = (room.teamStats.ties[idx] || 0) + 1;
+				else room.teamStats.losses[idx] = (room.teamStats.losses[idx] || 0) + 1;
+			});
+			// Reset streaks on tie
+			room.teamStats.streaks = room.teamStats.streaks.map(() => 0);
+		} else {
+			// Single winner
+			scores.forEach((_, idx) => {
+				if (idx === winners[0]) {
+					room.teamStats.wins[idx] = (room.teamStats.wins[idx] || 0) + 1;
+					// increment winner streak
+					room.teamStats.streaks[idx] = (room.teamStats.streaks[idx] || 0) + 1;
+				} else {
+					room.teamStats.losses[idx] = (room.teamStats.losses[idx] || 0) + 1;
+					// reset losing team's streak
+					room.teamStats.streaks[idx] = 0;
+				}
+			});
+		}
+	} catch (e) {
+		console.error('Failed to update team stats on game end:', e);
+	}
+}
+
 // Google Sheets Configuration
 // Set these environment variables or hardcode them (not recommended for production)
 const GOOGLE_SHEETS_CREDENTIALS = process.env.GOOGLE_SHEETS_CREDENTIALS || null;
@@ -939,6 +997,12 @@ io.on("connection", (socket) => {
 			bannedIPs: new Set(), // Track banned IPs to prevent rejoining
 			wordFeedback: [], // Store word feedback from players
 			suggestedWords: [], // Store user-suggested words
+			gamesPlayed: 0, // Number of times this room has started a new game via Play Again
+			teamStats: {
+				wins: [0, 0],
+				ties: [0, 0],
+				losses: [0, 0]
+			},
 		};
 
 		gameRooms.set(roomCode, room);
@@ -1393,7 +1457,9 @@ io.on("connection", (socket) => {
 			console.log(`Game word pools generated: ${estimatedTurnsPerTeam} rounds for ${teamCount} teams`);
 			console.log(`Target distribution: 35% easy, 40% medium, 25% hard`);
 
-			io.to(roomCode).emit("game-started", { gameState: room.gameState });
+			// Ensure stats array sizes match team count before starting
+			ensureTeamStats(room);
+			io.to(roomCode).emit("game-started", { gameState: room.gameState, room: { players: room.players, host: room.host, coAdmins: room.coAdmins, teamStats: room.teamStats, gamesPlayed: room.gamesPlayed } });
 			console.log(`Game started in room: ${roomCode} with ${teamCount} teams`);
 		}
 	});
@@ -2263,7 +2329,9 @@ io.on("connection", (socket) => {
 			if (gs.round > gs.maxRounds) {
 				// Game over - send feedback before emitting
 				handleRoomClosure(room, roomCode, "Game completed naturally").then(() => {
-					io.to(roomCode).emit("game-over", { gameState: gs });
+					// Update per-team stats then emit final state including room stats
+					updateStatsOnGameEnd(room);
+					io.to(roomCode).emit("game-over", { gameState: gs, room });
 				});
 				return;
 			}
@@ -2396,9 +2464,12 @@ io.on("connection", (socket) => {
 							if (team0Empty && team1Empty) {
 								// Both teams empty - send feedback before ending
 								handleRoomClosure(room, roomCode, "All players left").then(() => {
+									// Update team stats and emit game over with room metadata
+									updateStatsOnGameEnd(room);
 									io.to(roomCode).emit("game-over", {
 										gameState: room.gameState,
 										message: "All players left. Game ended.",
+										room,
 									});
 									room.gameState = null;
 									room.started = false;
@@ -2673,11 +2744,15 @@ io.on("connection", (socket) => {
 		if (room && isAdmin(room, socket.id) && room.gameState) {
 			// Send feedback to Google Sheets before ending game
 			handleRoomClosure(room, roomCode, "Game ended by admin").then(() => {
-				// Emit game over with admin message
+				// Update stats and emit game over with admin message and room metadata
+				updateStatsOnGameEnd(room);
 				io.to(roomCode).emit("game-over", {
 					gameState: room.gameState,
 					message: "Game ended by host",
+					room,
 				});
+
+
 
 				// Clear game state
 				room.gameState = null;
@@ -2704,9 +2779,12 @@ io.on("connection", (socket) => {
 				if (gs.round > gs.maxRounds) {
 					// Game over - send feedback before emitting
 					handleRoomClosure(room, roomCode, "Maximum rounds reached").then(() => {
+						// Update stats and emit final game-over with room
+						updateStatsOnGameEnd(room);
 						io.to(roomCode).emit("game-over", {
 							gameState: gs,
 							message: "Maximum rounds reached",
+							room,
 						});
 						room.gameState = null;
 						room.started = false;
@@ -2839,6 +2917,9 @@ io.on("connection", (socket) => {
 				gs.teamCount = 3;
 				room.teamCount = 3; // Update room's teamCount as well
 
+				// Ensure teamStats arrays include new team
+				ensureTeamStats(room);
+
 				// Regenerate word pool for 3 teams
 				const estimatedTurnsPerTeam = gs.maxRounds || 5;
 				const wordsPerTurn = 10;
@@ -2876,6 +2957,9 @@ io.on("connection", (socket) => {
 				gs.teamCount = 2;
 				room.teamCount = 2; // Update room's teamCount as well
 
+				// Resize teamStats arrays down to match 2 teams
+				ensureTeamStats(room);
+
 				// Broadcast to all players
 				io.to(roomCode).emit("third-team-removed", {
 					gameState: gs,
@@ -2891,6 +2975,91 @@ io.on("connection", (socket) => {
 	});
 
 	// Chat message handler
+
+	// Admin: Play again (reset everything except team membership and room)
+	socket.on('admin-play-again', async (data) => {
+		const { roomCode } = data || {};
+		const room = gameRooms.get(roomCode);
+		if (!room) return;
+
+		// Only allow host or co-admin
+		if (!isAdmin(room, socket.id)) {
+			console.log(`Unauthorized play-again attempt in room ${roomCode} by ${socket.id}`);
+			return;
+		}
+
+		// Notify clients that processing has started
+		io.to(roomCode).emit('play-again-processing', { message: 'Finalizing game data, preparing next round...' });
+
+		// Flush feedback and suggestions to Google Sheets (if configured)
+		try {
+			await handleRoomClosure(room, roomCode, 'Play again flush');
+			console.log(`Flushed feedback/suggestions for room ${roomCode} before play-again`);
+		} catch (err) {
+			console.error(`Error flushing feedback for room ${roomCode}:`, err);
+		}
+
+		// Capture current team membership before clearing
+		let teamsPlayers = [];
+		if (room.gameState && room.gameState.teams && room.gameState.teams.length > 0) {
+			teamsPlayers = room.gameState.teams.map(t => Array.isArray(t.players) ? [...t.players] : []);
+		} else {
+			// Derive from room.players with their .team assignments
+			const teamMap = {};
+			for (const p of room.players) {
+				const teamIdx = (p.team !== null && p.team !== undefined) ? p.team : 0;
+				if (!teamMap[teamIdx]) teamMap[teamIdx] = [];
+				teamMap[teamIdx].push(p.name);
+			}
+			const keys = Object.keys(teamMap).map(k => parseInt(k, 10)).sort((a, b) => a - b);
+			teamsPlayers = keys.map(k => teamMap[k]);
+		}
+
+		// Wipe game-related state but preserve teams and player-team mapping
+		room.started = false;
+		room.gameState = null;
+		room.roundHistory = [];
+		room.wordFeedback = [];
+		room.suggestedWords = [];
+
+		// Clear word pools / used indices / pre-generated pools
+		room.wordPools = null;
+		room.usedWordIndices = new Set();
+		room.teamWordBatches = {};
+		room.teamBonusPools = {};
+		room.teamWordStats = {};
+		room.teamRoundIndex = {};
+		room.teamBonusIndex = {};
+		room.gameWordPool = null;
+
+		// Ensure room.players reflect the same team grouping
+		for (const p of room.players) {
+			let found = false;
+			for (let ti = 0; ti < teamsPlayers.length; ti++) {
+				if (teamsPlayers[ti].includes(p.name)) {
+					p.team = ti;
+					found = true;
+					break;
+				}
+			}
+			if (!found) p.team = 0;
+		}
+
+		room.teamCount = Math.max(2, teamsPlayers.length || 2);
+
+		// Increment gamesPlayed counter for this room
+		room.gamesPlayed = (room.gamesPlayed || 0) + 1;
+
+		// Broadcast to all players that room is reset and ready to play again
+		io.to(roomCode).emit('play-again-ready', {
+			room: room,
+			teamsPlayers: teamsPlayers,
+			gamesPlayed: room.gamesPlayed
+		});
+
+		console.log(`Admin requested play-again in room ${roomCode}. Cleared game state, preserving teams.`);
+	});
+
 	socket.on("chat-message", (data) => {
 		const { roomCode, message, playerName } = data;
 		io.to(roomCode).emit("chat-message-received", {
@@ -3007,9 +3176,12 @@ io.on("connection", (socket) => {
 							if (team0Empty && team1Empty) {
 								// Both teams empty from disconnect - send feedback before ending
 								handleRoomClosure(room, roomCode, "All players disconnected").then(() => {
+									// Update stats and emit game-over with room metadata
+									updateStatsOnGameEnd(room);
 									io.to(roomCode).emit("game-over", {
 										gameState: room.gameState,
 										message: "All players left. Game ended.",
+										room,
 									});
 									room.gameState = null;
 									room.started = false;

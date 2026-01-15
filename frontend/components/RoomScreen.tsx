@@ -8,13 +8,14 @@ import { useGame } from './GameContext'
 
 // Supporters data - add new supporters here (include currency symbol in amount)
 const supporters = [
-  { name: 'Ansh', amount: '$1.50' },
-  { name: 'Sumedh Lodhi', amount: '₹100' },
-  { name: 'Magga', amount: '₹69' },
-  { name: 'Shubhxho', amount: '₹20' },
-  { name: 'Aditya Uniyal', amount: '₹2.04' },
-  { name: 'Cosmo', amount: '₹1' },
-  { name: 'Kifayath', amount: '₹1' },
+  { name: 'Ansh', amount: '$ 1.50' },
+  { name: 'Sumedh Lodhi', amount: '₹ 100' },
+  { name: 'Magga', amount: '₹ 69' },
+  { name: 'Shubhxho', amount: '₹ 20' },
+  { name: 'Blok', amount: '₹ 6.70' },
+  { name: 'Aditya Uniyal', amount: '₹ 2.04' },
+  { name: 'Cosmo', amount: '₹ 1' },
+  { name: 'Kifayath', amount: '₹ 1' },
 
 ]
 
@@ -53,7 +54,7 @@ export default function RoomScreen() {
             <Heart className="w-6 h-6 text-pink-400 fill-pink-400" />
             <h3 className="font-bold text-pink-300 text-xl">Our Supporters</h3>
           </div>
-          <div className="space-y-4 max-h-[300px] overflow-y-auto custom-scrollbar">
+          <div className="space-y-4 max-h-[300px] overflow-y-auto custom-scrollbar pr-3">
             {supporters.map((supporter, index) => (
               <motion.div
                 key={supporter.name}

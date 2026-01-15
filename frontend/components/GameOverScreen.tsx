@@ -14,7 +14,7 @@ interface PlayerContribution {
 }
 
 export default function GameOverScreen() {
-  const { gameState, setCurrentScreen, leaveGame } = useGame()
+  const { gameState, setCurrentScreen, leaveGame, socket, roomCode, isAdmin, playAgainProcessing } = useGame()
 
   // Get taboo deductions per team
   const tabooDeductionsByTeam = gameState.confirmedTaboosByTeam || {}
@@ -38,6 +38,7 @@ export default function GameOverScreen() {
   // Find winner by comparing effective scores
   const sortedTeams = [...teamsWithEffectiveScores].sort((a, b) => b.effectiveScore - a.effectiveScore);
   const winner = sortedTeams[0].effectiveScore > sortedTeams[1].effectiveScore ? sortedTeams[0] : null;
+  const winnerIndex = winner ? winner.originalIndex : null;
 
   // Get all contributors sorted by points
   const contributions: PlayerContribution[] = Object.entries(gameState.playerContributions)
@@ -93,15 +94,15 @@ export default function GameOverScreen() {
 
       {/* Final Scores */}
       <div className={`grid ${gameState.teamCount === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-6 mb-12`}>
-        {sortedTeams.map((team, index) => {
+        {teamsWithEffectiveScores.map((team, index) => {
           const teamColors = ['blue', 'red', 'green'];
           const teamColorName = teamColors[team.originalIndex];
-          const isWinner = winner === team;
+          const isWinner = winnerIndex === team.originalIndex;
 
           return (
             <motion.div
               key={team.name}
-              initial={{ x: index % 2 === 0 ? -50 : 50, opacity: 0 }}
+              initial={{ x: team.originalIndex % 2 === 0 ? -50 : 50, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               transition={{ delay: 0.2 }}
               className={`glass-strong rounded-2xl p-8 border-2 ${isWinner ? 'border-yellow-500 bg-yellow-500/10' : `border-${teamColorName}-500/30`
@@ -220,15 +221,33 @@ export default function GameOverScreen() {
         transition={{ delay: 0.6 }}
         className="text-center"
       >
-        <button
-          onClick={() => {
-            leaveGame()
-          }}
-          className="px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform hover:scale-105 flex items-center gap-3 mx-auto"
-        >
-          <Home className="w-6 h-6" />
-          Back to Home
-        </button>
+        <div className="flex items-center justify-center gap-4">
+          {isAdmin && (
+            <button
+              onClick={() => {
+                try {
+                  socket?.emit('admin-play-again', { roomCode })
+                } catch (e) {
+                  console.error('Failed to emit admin-play-again', e)
+                }
+              }}
+              disabled={playAgainProcessing}
+              className={`px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform ${playAgainProcessing ? 'opacity-60 cursor-not-allowed' : 'hover:scale-105'} flex items-center gap-3`}
+            >
+              ▶ Play Again
+            </button>
+          )}
+
+          <button
+            onClick={() => {
+              leaveGame()
+            }}
+            className="px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform hover:scale-105 flex items-center gap-3"
+          >
+            <Home className="w-6 h-6" />
+            Back to Home
+          </button>
+        </div>
       </motion.div>
     </div>
   )
