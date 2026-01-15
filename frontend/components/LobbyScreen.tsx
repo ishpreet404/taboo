@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function LobbyScreen() {
-  const { roomCode, players, isHost, isAdmin, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted, gameState } = useGame()
+  const { roomCode, players, isHost, isAdmin, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted, gameState, setNotification } = useGame()
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [editingTeamIndex, setEditingTeamIndex] = useState<number | null>(null)
   const [editingTeamName, setEditingTeamName] = useState<string>('')
@@ -15,6 +15,117 @@ export default function LobbyScreen() {
   useEffect(() => {
     console.log('LobbyScreen - lobbyTeamCount changed to:', lobbyTeamCount)
   }, [lobbyTeamCount])
+
+  // Socket listeners for captain draft flow
+  useEffect(() => {
+    if (!socket) return
+
+    const onStart = (data: any) => {
+      // show modal for admin to pick captains
+      setSelectedCaptains(Array(lobbyTeamCount).fill(null))
+      setCaptainModalOpen(true)
+    }
+
+    const onCaptainsConfirmed = (data: any) => {
+      // server sends draft order / teams initial
+      setDraftState(data)
+      setCaptainModalOpen(false)
+    }
+
+    const onCaptainPickTurn = (data: any) => {
+      setDraftState(data)
+    }
+
+    const onCaptainPicked = (data: any) => {
+      setDraftState((prev: any) => ({ ...(prev || {}), ...data }))
+    }
+
+    const onLastPlayerChoice = (data: any) => {
+      // If this client is the last player, server sends this event to that client only
+      setDraftState((prev: any) => ({ ...(prev || {}), lastPlayerChoice: data }))
+    }
+
+    const onCaptainSelectionComplete = (data: any) => {
+      setDraftState(null)
+      setCaptainModalOpen(false)
+      // server will emit team updates; show notification
+      setNotification({ message: 'Captain draft complete. Teams assigned.', type: 'success' })
+      setTimeout(() => setNotification(null), 3000)
+    }
+
+    socket.on('captain-selection-started', onStart)
+    socket.on('captains-confirmed', onCaptainsConfirmed)
+    socket.on('captain-pick-turn', onCaptainPickTurn)
+    socket.on('captain-picked', onCaptainPicked)
+    socket.on('last-player-choice', onLastPlayerChoice)
+    socket.on('captain-waiting-ready', (d: any) => {
+      // ensure draft state contains captains list
+      setDraftState((prev: any) => ({ ...(prev || {}), captains: d.captains }))
+    })
+    socket.on('captain-ready-update', (d: any) => {
+      setDraftState((prev: any) => ({ ...(prev || {}), ready: d.ready }))
+    })
+    socket.on('coin-flip', (d: any) => {
+      // optional: could show animation; for now attach to draftState
+      setDraftState((prev: any) => ({ ...(prev || {}), coinFlipInProgress: true }))
+    })
+    socket.on('coin-result', (d: any) => {
+      setDraftState((prev: any) => ({ ...(prev || {}), coinFlipInProgress: false, coinResult: d.winningTeamIndex }))
+    })
+    socket.on('captain-selection-complete', onCaptainSelectionComplete)
+
+    return () => {
+      socket.off('captain-selection-started', onStart)
+      socket.off('captains-confirmed', onCaptainsConfirmed)
+      socket.off('captain-pick-turn', onCaptainPickTurn)
+      socket.off('captain-picked', onCaptainPicked)
+      socket.off('last-player-choice', onLastPlayerChoice)
+      socket.off('captain-waiting-ready')
+      socket.off('captain-ready-update')
+      socket.off('coin-flip')
+      socket.off('coin-result')
+      socket.off('captain-selection-complete', onCaptainSelectionComplete)
+    }
+  }, [socket, lobbyTeamCount])
+
+  // Admin confirms selected captains
+  const confirmCaptains = () => {
+    if (!isAdmin || !socket || !roomCode) return
+    // validate
+    const picks = selectedCaptains.filter(Boolean) as string[]
+    if (picks.length !== lobbyTeamCount) {
+      setNotification({ message: 'Please select a captain for each team.', type: 'warning' })
+      setTimeout(() => setNotification(null), 3000)
+      return
+    }
+    const unique = Array.from(new Set(picks))
+    if (unique.length !== picks.length) {
+      setNotification({ message: 'Cannot select the same player as captain for multiple teams.', type: 'warning' })
+      setTimeout(() => setNotification(null), 3000)
+      return
+    }
+    // selectedCaptains contains player ids
+    socket.emit('admin-set-captains', { roomCode, captains: selectedCaptains })
+    setCaptainModalOpen(false)
+  }
+
+  // Player (captain) picks a player during draft
+  const pickPlayer = (playerId: string) => {
+    if (!socket || !roomCode) return
+    socket.emit('captain-pick', { roomCode, playerId })
+  }
+
+  // Captain ready for coin flip
+  const captainReady = () => {
+    if (!socket || !roomCode) return
+    socket.emit('captain-ready', { roomCode })
+  }
+
+  // Last remaining player chooses a team
+  const chooseTeamAsLastPlayer = (teamIndex: number) => {
+    if (!socket || !roomCode) return
+    socket.emit('last-player-choose', { roomCode, teamIndex })
+  }
 
   // Update team count and broadcast to all players (host only)
   const handleTeamCountChange = (newTeamCount: number) => {
@@ -69,6 +180,23 @@ export default function LobbyScreen() {
   const handleRandomizeTeams = () => {
     if (!isAdmin) return
     socket?.emit('admin-randomize-teams', { roomCode })
+  }
+
+  // Captain selection / draft states (admin only)
+  const [captainModalOpen, setCaptainModalOpen] = useState(false)
+  const [selectedCaptains, setSelectedCaptains] = useState<(string | null)[]>([])
+  const [draftState, setDraftState] = useState<any>(null)
+
+  // Start captain selection (host/admin)
+  const handleStartCaptainSelection = () => {
+    if (!isAdmin) return
+    if (lobbyTeamCount !== 2) {
+      // For now only support 2-team captain draft
+      setNotification({ message: 'Captain draft currently supports 2 teams only.', type: 'warning' })
+      setTimeout(() => setNotification(null), 3000)
+      return
+    }
+    socket?.emit('start-captain-selection', { roomCode })
   }
 
   const copyRoomCode = () => {
@@ -143,13 +271,22 @@ export default function LobbyScreen() {
               {/* Center: Randomize button */}
               <div className="flex items-center justify-center justify-self-center">
                 {isAdmin && (
-                  <button
-                    onClick={handleRandomizeTeams}
-                    className="px-3 py-1 glass-strong rounded-lg hover:bg-purple-500/20 transition-colors flex items-center gap-2 text-purple-400 border border-purple-500/20 whitespace-nowrap"
-                  >
-                    <Shuffle className="w-4 h-4" />
-                    <span className="inline">Randomize Teams</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleRandomizeTeams}
+                      className="px-3 py-1 glass-strong rounded-lg hover:bg-purple-500/20 transition-colors flex items-center gap-2 text-purple-400 border border-purple-500/20 whitespace-nowrap"
+                    >
+                      <Shuffle className="w-4 h-4" />
+                      <span className="inline">Randomize Teams</span>
+                    </button>
+                    <button
+                      onClick={handleStartCaptainSelection}
+                      className="px-3 py-1 glass-strong rounded-lg hover:bg-yellow-500/20 transition-colors flex items-center gap-2 text-yellow-300 border border-yellow-500/20 whitespace-nowrap"
+                    >
+                      <Crown className="w-4 h-4" />
+                      <span className="inline">Start Captain Draft</span>
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -487,6 +624,117 @@ export default function LobbyScreen() {
               >
                 Leave
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Captain selection modal (admin selects captains) */}
+      {captainModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setCaptainModalOpen(false)}>
+          <div className="glass-strong rounded-2xl p-6 md:p-8 max-w-2xl w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-xl md:text-2xl font-bold mb-4">Select Captains</h3>
+            <p className="text-sm text-gray-400 mb-4">Click a player to assign them as captain for each team.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Array.from({ length: lobbyTeamCount }).map((_, idx) => (
+                <div key={idx} className="p-3 rounded-xl bg-white/5">
+                  <div className="text-sm text-gray-300 mb-2">Team {idx + 1} Captain</div>
+                  <div className="flex flex-wrap gap-2">
+                    {players.map((p) => {
+                      const alreadySelected = selectedCaptains.includes(p.id) && selectedCaptains[idx] !== p.id
+                      return (
+                        <button key={p.id} disabled={alreadySelected} onClick={() => setSelectedCaptains((prev) => {
+                          const copy = [...(prev || Array(lobbyTeamCount).fill(null))]
+                          copy[idx] = p.id
+                          return copy
+                        })} className={`px-3 py-1 rounded-lg ${selectedCaptains[idx] === p.id ? 'bg-yellow-500 text-black' : alreadySelected ? 'opacity-50 cursor-not-allowed glass' : 'glass'}`}>
+                          {p.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex gap-3">
+              <button onClick={() => setCaptainModalOpen(false)} className="flex-1 px-4 py-2 glass rounded-xl">Cancel</button>
+              <button onClick={confirmCaptains} className="flex-1 px-4 py-2 bg-yellow-500 rounded-xl">Confirm Captains</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Draft modal (active picking) */}
+      {draftState && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setDraftState(null)}>
+          <div className="glass-strong rounded-2xl p-6 md:p-8 max-w-3xl w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-xl md:text-2xl font-bold mb-4">Captain Draft</h3>
+            {/* Captains + ready state / coin result */}
+            {draftState?.captains && (
+              <div className="mb-4 flex items-center gap-4">
+                {draftState.captains.map((cid: string, i: number) => (
+                  <div key={cid} className="p-2 rounded-md bg-white/5 flex-1">
+                    <div className="text-sm text-gray-300">Team {i + 1} Captain</div>
+                    <div className="font-semibold">{draftState.captainNames?.[i] || (players.find(p => p.id === cid)?.name) || '—'}</div>
+                    <div className="text-xs text-gray-400 mt-1">{draftState.ready && draftState.ready[cid] ? 'Ready' : 'Not ready'}</div>
+                    {socket?.id === cid && !draftState.ready?.[cid] && (
+                      <button onClick={captainReady} className="mt-2 px-3 py-1 bg-blue-500 rounded-lg text-sm">Press Ready</button>
+                    )}
+                  </div>
+                ))}
+                <div className="p-2 rounded-md bg-white/5">
+                  {draftState.coinFlipInProgress ? (
+                    <div className="text-sm text-gray-300">Coin flipping...</div>
+                  ) : draftState.coinResult !== undefined ? (
+                    <div className="text-sm text-gray-300">Coin: {draftState.coinResult === 0 ? 'Blue' : 'Red'} — {`Team ${draftState.coinResult + 1}`} picks first</div>
+                  ) : (
+                    <div className="text-sm text-gray-300">Waiting for captains to ready...</div>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="flex flex-col md:flex-row gap-4">
+              <div className="flex-1">
+                <div className="text-sm text-gray-400 mb-2">Teams</div>
+                <div className="grid grid-cols-1 gap-2">
+                  {draftState.teams?.map((t: any, i: number) => (
+                    <div key={i} className="p-3 rounded-lg bg-white/5">
+                      <div className="text-sm text-gray-300">{teamName(i, `Team ${i + 1}`)}</div>
+                      <div className="font-semibold mt-2">{t.players.join(', ')}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="w-80">
+                <div className="text-sm text-gray-400 mb-2">Available Players</div>
+                <div className="space-y-2 max-h-64 overflow-auto">
+                  {draftState.lastPlayerChoice ? (
+                    <div className="p-3 bg-white/5 rounded-lg">
+                      <div className="mb-2">You're the last unassigned player. Choose a team:</div>
+                      <div className="flex gap-2">
+                        {Array.from({ length: (lobbyTeamCount || 2) }).map((_, ti) => (
+                          <button key={ti} onClick={() => chooseTeamAsLastPlayer(ti)} className="px-3 py-1 bg-blue-500 rounded-lg">Join Team {ti + 1}</button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    draftState.availablePlayers?.map((p: any) => (
+                      <div key={p.id} className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                        <div>{p.name}</div>
+                        {draftState.currentCaptainId === socket?.id ? (
+                          <button onClick={() => pickPlayer(p.id)} className="px-3 py-1 bg-green-500 rounded-lg">Pick</button>
+                        ) : (
+                          <div className="text-xs text-gray-400">Waiting for captain</div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="text-xs text-gray-400 mt-3">Current pick: {draftState.currentCaptainName}</div>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-3">
+              <button onClick={() => setDraftState(null)} className="px-4 py-2 glass rounded-xl">Close</button>
             </div>
           </div>
         </div>

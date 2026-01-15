@@ -2935,6 +2935,181 @@ io.on("connection", (socket) => {
 		}
 	});
 
+	// Captain draft: start selection flow (admin triggers)
+	socket.on('start-captain-selection', (data) => {
+		const { roomCode } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !isAdmin(room, socket.id)) return
+		// Notify clients to open captain selection UI (admin will pick captains)
+		io.to(roomCode).emit('captain-selection-started', { roomCode })
+		console.log(`Captain selection started in room ${roomCode} by admin ${socket.id}`)
+	})
+
+	// Admin confirms selected captains
+	socket.on('admin-set-captains', (data) => {
+		const { roomCode, captains } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !isAdmin(room, socket.id)) return
+		try {
+			const teamCount = room.teamCount || 2
+			if (!Array.isArray(captains) || captains.length !== teamCount) {
+				console.warn('Invalid captains payload')
+				return
+			}
+
+			// Validate captains are present in room
+			const captainPlayers = captains.map(cid => room.players.find(p => p.id === cid)).filter(Boolean)
+			if (captainPlayers.length !== teamCount) {
+				console.warn('One or more captains not found in room')
+				return
+			}
+
+			// Initialize draft state on room
+			room.draftState = {
+				captains: captains.slice(), // array of socket ids
+				teams: Array.from({ length: teamCount }).map((_, i) => ({ players: [captainPlayers[i].name] })),
+				availablePlayers: room.players.filter(p => !captains.includes(p.id)).map(p => ({ id: p.id, name: p.name })),
+				currentCaptainIndex: null,
+				ready: {}, // map of captainId -> boolean
+				coinResult: null
+			}
+
+			// mark captains' team assignment
+			captains.forEach((cid, idx) => {
+				const pl = room.players.find(p => p.id === cid)
+				if (pl) pl.team = idx
+			})
+
+			// Decide pick order: for 2 teams do coin toss, for >2 shuffle
+			if (teamCount === 2) {
+				const toss = Math.random() < 0.5 ? 0 : 1
+				room.draftState.currentCaptainIndex = toss
+			} else {
+				// shuffle order of captains
+				const order = room.draftState.captains.slice()
+				for (let i = order.length - 1; i > 0; i--) {
+					const j = Math.floor(Math.random() * (i + 1))
+						;[order[i], order[j]] = [order[j], order[i]]
+				}
+				room.draftState.captainOrder = order
+				room.draftState.currentCaptainIndex = 0
+			}
+
+			// Broadcast captains confirmed and initial teams
+
+			// Notify clients that captains are confirmed and ask captains to ready up for coin flip
+			io.to(roomCode).emit('captains-confirmed', {
+				teams: room.draftState.teams,
+				availablePlayers: room.draftState.availablePlayers,
+				captains: room.draftState.captains,
+				captainNames: room.draftState.captains.map(cid => room.players.find(p => p.id === cid)?.name || ''),
+				ready: room.draftState.ready
+			})
+
+			// Ask captains to press ready for coin flip
+			io.to(roomCode).emit('captain-waiting-ready', { captains: room.draftState.captains })
+			console.log(`Captains set in room ${roomCode}. Starting draft.`)
+		} catch (e) {
+			console.error('Error in admin-set-captains:', e)
+		}
+	})
+
+	// Captain picks a player
+	socket.on('captain-pick', (data) => {
+		const { roomCode, playerId } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !room.draftState) return
+		const ds = room.draftState
+		const teamCount = room.teamCount || 2
+		const currentCaptainId = ds.captains[ds.currentCaptainIndex]
+		if (socket.id !== currentCaptainId) return // not this captain's turn
+		// find player in available
+		const idx = ds.availablePlayers.findIndex(p => p.id === playerId)
+		if (idx === -1) return
+		const picked = ds.availablePlayers.splice(idx, 1)[0]
+		// assign to captain's team
+		ds.teams[ds.currentCaptainIndex].players.push(picked.name)
+		// update actual room player team
+		const rpl = room.players.find(p => p.id === picked.id)
+		if (rpl) rpl.team = ds.currentCaptainIndex
+
+		// If no players left, draft complete
+		if (ds.availablePlayers.length === 0) {
+			io.to(roomCode).emit('captain-selection-complete', { teams: ds.teams })
+			io.to(roomCode).emit('team-updated', { room })
+			delete room.draftState
+			return
+		}
+
+		// If only one player left, prompt them to choose
+		if (ds.availablePlayers.length === 1) {
+			const last = ds.availablePlayers[0]
+			io.to(last.id).emit('last-player-choice', { teams: ds.teams.map(t => ({ name: t.players[0] ? t.players[0] : '' })), teamCount })
+			// wait for last-player-choose event
+			io.to(roomCode).emit('captain-picked', { teams: ds.teams, availablePlayers: ds.availablePlayers })
+			return
+		}
+
+		// advance to next captain
+		ds.currentCaptainIndex = (ds.currentCaptainIndex + 1) % teamCount
+
+		// Broadcast updated pick
+		io.to(roomCode).emit('captain-picked', { teams: ds.teams, availablePlayers: ds.availablePlayers, currentCaptainId: ds.captains[ds.currentCaptainIndex], currentCaptainName: room.players.find(p => p.id === ds.captains[ds.currentCaptainIndex])?.name })
+	})
+
+	// Captain ready for coin flip
+	socket.on('captain-ready', (data) => {
+		const { roomCode } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !room.draftState) return
+		const ds = room.draftState
+		if (!ds.captains || !ds.captains.includes(socket.id)) return
+		// mark ready
+		ds.ready[socket.id] = true
+		// notify room of updated ready state
+		io.to(roomCode).emit('captain-ready-update', { ready: ds.ready })
+		// check if all captains are ready
+		const allReady = ds.captains.every(cid => ds.ready[cid])
+		if (!allReady) return
+		// perform coin flip: 0 => blue (team 0), 1 => red (team 1)
+		const flip = Math.random() < 0.5 ? 0 : 1
+		// emit coin-flip (for animation) then result
+		io.to(roomCode).emit('coin-flip', { result: flip })
+		setTimeout(() => {
+			// set current captain index to winner (team index)
+			ds.currentCaptainIndex = flip
+			io.to(roomCode).emit('coin-result', { winningTeamIndex: flip, currentCaptainId: ds.captains[ds.currentCaptainIndex], currentCaptainName: room.players.find(p => p.id === ds.captains[ds.currentCaptainIndex])?.name })
+			// start first pick
+			io.to(roomCode).emit('captain-pick-turn', {
+				teams: ds.teams,
+				availablePlayers: ds.availablePlayers,
+				currentCaptainId: ds.captains[ds.currentCaptainIndex],
+				currentCaptainName: room.players.find(p => p.id === ds.captains[ds.currentCaptainIndex])?.name
+			})
+		}, 1500)
+	})
+
+	// Last player chooses team when odd count
+	socket.on('last-player-choose', (data) => {
+		const { roomCode, teamIndex } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !room.draftState) return
+		const ds = room.draftState
+		const last = ds.availablePlayers[0]
+		if (!last) return
+		// assign
+		const rpl = room.players.find(p => p.id === last.id)
+		if (rpl) rpl.team = teamIndex
+		ds.teams[teamIndex].players.push(last.name)
+		ds.availablePlayers = []
+		// Draft complete - broadcast final teams and update server-side room teams
+		io.to(roomCode).emit('captain-selection-complete', { teams: ds.teams })
+		// Also broadcast team-updated so clients can refresh lobby view
+		io.to(roomCode).emit('team-updated', { room })
+		// clear draft state
+		delete room.draftState
+	})
+
 	// Admin: Add/Remove Third Team
 	socket.on("admin-toggle-third-team", (data) => {
 		const { roomCode, addTeam } = data;
