@@ -1044,7 +1044,8 @@ export default function GameScreen() {
       }
 
       const fullFeedback = feedbackParts.join(' | ')
-      submitWordFeedback(feedbackModal.word, feedbackOptions.wordTooDifficult ? 'hard' : (feedbackOptions.changeDifficultyTo || ''), feedbackText)
+      // Parameters order: word, feedback, difficulty (current word difficulty)
+      submitWordFeedback(feedbackModal.word, fullFeedback, feedbackModal.difficulty)
       setGlobalNotification({ message: 'Feedback submitted! Thank you.', type: 'success' })
       setTimeout(() => setGlobalNotification(null), 3000)
       setFeedbackModal(null)
@@ -1111,6 +1112,28 @@ export default function GameScreen() {
       socket.off('suggest-word-result', onSuggest)
     }
   }, [socket])
+
+  // Debounced word existence check for suggestion modal
+  useEffect(() => {
+    if (!socket || !suggestionModalOpen) return
+    const trimmed = suggestionText.trim()
+    if (!trimmed || trimmed.length < 2) {
+      // Reset check result if input is too short
+      setSuggestionCheckResult(null)
+      setSuggestionChecking(false)
+      return
+    }
+
+    // Set checking state and debounce the actual check
+    setSuggestionChecking(true)
+    const debounceTimer = setTimeout(() => {
+      socket.emit('check-word-exists', { roomCode, word: trimmed })
+    }, 300)
+
+    return () => {
+      clearTimeout(debounceTimer)
+    }
+  }, [socket, suggestionText, suggestionModalOpen, roomCode])
 
   const handleToggleCoAdmin = (targetPlayerName: string) => {
     if (!isHost) return
