@@ -102,7 +102,7 @@ export default function RoomScreen() {
               >
                 <motion.div
                   animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                  transition={{ duration: 1, repeat: Infinity, repeatDelay: 2, ease: "easeInOut" }}
                 >
                   <img src="https://cdn.jsdelivr.net/npm/simple-icons@v9/icons/discord.svg" alt="Discord" className="w-6 h-6" style={{ filter: 'invert(1)' }} />
                 </motion.div>
@@ -347,7 +347,7 @@ export default function RoomScreen() {
               >
                 <motion.div
                   animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                  transition={{ duration: 1, repeat: Infinity, repeatDelay: 2, ease: "easeInOut" }}
                 >
                   <img src="https://cdn.jsdelivr.net/npm/simple-icons@v9/icons/discord.svg" alt="Discord" className="w-6 h-6" style={{ filter: 'invert(1)' }} />
                 </motion.div>
