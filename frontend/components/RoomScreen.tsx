@@ -82,6 +82,33 @@ export default function RoomScreen() {
               ✨ Join our supporters! ✨
             </p>
           </motion.div>
+
+          {/* New message and Discord link */}
+          <motion.div
+            className="mt-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 1.2 }}
+          >
+            <p className="text-sm text-pink-300/80 text-center font-medium">
+              Join our Discord to get featured!
+            </p>
+            <div className="flex justify-center mt-2">
+              <a
+                href="https://discord.gg/hemVkeHYmM"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-400 hover:text-blue-300"
+              >
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                >
+                  <img src="https://cdn.jsdelivr.net/npm/simple-icons@v9/icons/discord.svg" alt="Discord" className="w-6 h-6" style={{ filter: 'invert(1)' }} />
+                </motion.div>
+              </a>
+            </div>
+          </motion.div>
         </div>
       </motion.div>
 
@@ -306,6 +333,27 @@ export default function RoomScreen() {
           <p className="text-xs text-pink-300/80 text-center mt-4 font-medium">
             ✨ Join our supporters! ✨
           </p>
+
+          <div className="mt-4 text-center">
+            <p className="text-xs text-pink-300/80 font-medium">
+              Join our Discord to get featured!
+            </p>
+            <div className="flex justify-center mt-2">
+              <a
+                href="https://discord.gg/hemVkeHYmM"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-400 hover:text-blue-300"
+              >
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                >
+                  <img src="https://cdn.jsdelivr.net/npm/simple-icons@v9/icons/discord.svg" alt="Discord" className="w-6 h-6" style={{ filter: 'invert(1)' }} />
+                </motion.div>
+              </a>
+            </div>
+          </div>
         </div>
       </motion.div>
     </div>
