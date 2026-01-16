@@ -44,11 +44,13 @@ interface GameState {
   tabooReporting?: boolean // Enable taboo reporting feature
   tabooVoting?: boolean // Enable taboo voting feature
   confirmedTaboosByTeam?: Record<number, number> // Track taboo point deductions per team
+  gameStarted?: boolean
 }
 
 interface Notification {
   message: string
   type: 'info' | 'warning' | 'success'
+  id?: string
 }
 
 interface GameContextType {
@@ -64,6 +66,7 @@ interface GameContextType {
   gameState: GameState
   connected: boolean
   notification: Notification | null
+  notifications: Notification[]
   teamSwitchingLocked: boolean
   lobbyTeamCount: number
   tabooReporting: boolean
@@ -100,11 +103,28 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [players, setPlayers] = useState<Player[]>([])
   const [teamSwitchingLocked, setTeamSwitchingLocked] = useState(false)
   const [midTurnJoinData, setMidTurnJoinData] = useState<any>(null)
-  const [notification, setNotification] = useState<Notification | null>(null)
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const notification = notifications.length > 0 ? notifications[0] : null
+
+  // Custom notification setter that supports stacking
+  const setNotification = (notif: Notification | null) => {
+    if (!notif) return
+    const id = Date.now().toString() + Math.random().toString(36).substring(2, 9)
+    const newNotif = { ...notif, id }
+    setNotifications(prev => [...prev, newNotif])
+
+    // Auto-remove after 4.5 seconds
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id))
+    }, 4500)
+  }
   const [lobbyTeamCount, setLobbyTeamCount] = useState(2) // Track team count in lobby
   const [tabooReporting, setTabooReporting] = useState(false) // Taboo reporting off by default
   const [tabooVoting, setTabooVoting] = useState(false) // Taboo voting off by default
   const wasKicked = useRef(false)
+  const playerNameRef = useRef<string | null>(null)
+  useEffect(() => { playerNameRef.current = playerName }, [playerName])
+
   const router = useRouter()
   const ignoreGameOverUntil = useRef<number>(0)
   const [playAgainProcessing, setPlayAgainProcessing] = useState(false)
@@ -126,7 +146,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
     currentWords: [],
     guessedWords: [],
     skippedWords: [],
-    playerContributions: {}
+    playerContributions: {},
+    gameStarted: false
   })
 
   // Initialize Discord SDK if running as Discord Activity
@@ -384,8 +405,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setLobbyTeamCount(data.gameState.teamCount)
       }
       setCurrentScreen('lobby') // Show lobby so they can pick a team
-      setNotification({ message: 'Game is in progress! Please join a team to participate.', type: 'info' })
-      setTimeout(() => setNotification(null), 4000)
     })
 
     newSocket.on('room-rejoined', (data) => {
@@ -564,7 +583,18 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setIsHost(isNowHost)
         setIsAdmin(isNowHost || (data.room.coAdmins && data.room.coAdmins.includes(newSocket.id)))
       }
-      setCurrentScreen('game')
+
+      // Only switch screen if we are in the lobby or if we are already assigned to a team in the new game
+      // This prevents players still on the GameOverScreen from being forced into the game
+      setCurrentScreen(prev => {
+        const isPlayerOnAnyTeam = data.gameState.teams.some((t: any) =>
+          t.players.some((p: string) => p === playerNameRef.current)
+        )
+        if (prev === 'lobby' || isPlayerOnAnyTeam) {
+          return 'game'
+        }
+        return prev
+      })
     })
 
     newSocket.on('third-team-added', (data) => {
@@ -998,6 +1028,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         gameState,
         connected,
         notification,
+        notifications,
         teamSwitchingLocked,
         lobbyTeamCount,
         tabooReporting,

@@ -2377,6 +2377,7 @@ io.on("connection", (socket) => {
 				handleRoomClosure(room, roomCode, "Game completed naturally").then(() => {
 					// Update per-team stats then emit final state including room stats
 					updateStatsOnGameEnd(room);
+					gs.gameStarted = false;
 					io.to(roomCode).emit("game-over", { gameState: gs, room });
 					// Clear player team assignments immediately after game end so lobby shows empty teams
 					try {
@@ -2384,6 +2385,8 @@ io.on("connection", (socket) => {
 							p.team = null
 							// Hide players from waiting list until they individually opt back in
 							p.showInWaiting = false
+							// Reset captain status when game ends
+							p.isCaptain = false
 						}
 						room.started = false
 						io.to(roomCode).emit('team-updated', { room })
@@ -2771,35 +2774,40 @@ io.on("connection", (socket) => {
 		const { roomCode, teamIndex, playerIndex } = data;
 		const room = gameRooms.get(roomCode);
 
-		if (room && isAdmin(room, socket.id) && room.gameState) {
-			const gs = room.gameState;
+		if (room && room.gameState) {
+			const player = room.players.find(p => p.id === socket.id);
+			const isCaptainOfTeam = player && player.isCaptain && player.team === teamIndex;
 
-			// Validate team and player indices
-			if (
-				teamIndex >= 0 &&
-				teamIndex < gs.teams.length &&
-				playerIndex >= 0 &&
-				playerIndex < gs.teams[teamIndex].players.length
-			) {
-				// Set the describer for the specified team
-				gs.currentDescriberIndex[teamIndex] = playerIndex;
+			if (isAdmin(room, socket.id) || isCaptainOfTeam) {
+				const gs = room.gameState;
 
-				// If setting describer for current team, also update turn
-				if (teamIndex === gs.currentTeamIndex) {
-					io.to(roomCode).emit("describer-changed", {
-						gameState: gs,
-						message: `${gs.teams[teamIndex].players[playerIndex]} is now the describer for ${gs.teams[teamIndex].name}`,
-					});
-				} else {
-					io.to(roomCode).emit("describer-changed", {
-						gameState: gs,
-						message: `${gs.teams[teamIndex].players[playerIndex]} will be the next describer for ${gs.teams[teamIndex].name}`,
-					});
+				// Validate team and player indices
+				if (
+					teamIndex >= 0 &&
+					teamIndex < gs.teams.length &&
+					playerIndex >= 0 &&
+					playerIndex < gs.teams[teamIndex].players.length
+				) {
+					// Set the describer for the specified team
+					gs.currentDescriberIndex[teamIndex] = playerIndex;
+
+					// If setting describer for current team, also update turn
+					if (teamIndex === gs.currentTeamIndex) {
+						io.to(roomCode).emit("describer-changed", {
+							gameState: gs,
+							message: `${gs.teams[teamIndex].players[playerIndex]} is now the describer for ${gs.teams[teamIndex].name}`,
+						});
+					} else {
+						io.to(roomCode).emit("describer-changed", {
+							gameState: gs,
+							message: `${gs.teams[teamIndex].players[playerIndex]} will be the next describer for ${gs.teams[teamIndex].name}`,
+						});
+					}
+
+					console.log(
+						`Host set describer for team ${teamIndex} to player ${playerIndex} in room ${roomCode}`
+					);
 				}
-
-				console.log(
-					`Host set describer for team ${teamIndex} to player ${playerIndex} in room ${roomCode}`
-				);
 			}
 		}
 	});
@@ -2814,6 +2822,7 @@ io.on("connection", (socket) => {
 			handleRoomClosure(room, roomCode, "Game ended by admin").then(() => {
 				// Update stats and emit game over with admin message and room metadata
 				updateStatsOnGameEnd(room);
+				room.gameState.gameStarted = false;
 				io.to(roomCode).emit("game-over", {
 					gameState: room.gameState,
 					message: "Game ended by host",
@@ -2824,6 +2833,8 @@ io.on("connection", (socket) => {
 					for (const p of room.players) {
 						p.team = null
 						p.showInWaiting = false
+						// Reset captain status when game ends
+						p.isCaptain = false
 					}
 					room.gameState = null;
 					room.started = false;
@@ -2969,6 +2980,13 @@ io.on("connection", (socket) => {
 		const { roomCode } = data || {}
 		const room = gameRooms.get(roomCode)
 		if (!room || !isAdmin(room, socket.id)) return
+
+		// At least 4 players required (2 captains + at least 1 player to pick each, or similar logic)
+		if (room.players.length < 4) {
+			socket.emit('error', { message: 'Need at least 4 players in the lobby for Team Division.' })
+			return
+		}
+
 		// Notify clients to open captain selection UI (admin will pick captains)
 		io.to(roomCode).emit('captain-selection-started', { roomCode })
 		console.log(`Captain selection started in room ${roomCode} by admin ${socket.id}`)
@@ -3337,8 +3355,11 @@ io.on("connection", (socket) => {
 		const room = gameRooms.get(roomCode);
 		if (!room) return;
 
-		// Only allow host or co-admin
-		if (!isAdmin(room, socket.id)) {
+		// Only allow host, co-admin, or team captain (for their own team)
+		const player = room.players.find(p => p.id === socket.id);
+		const isCaptainOfTeam = player && player.isCaptain && Number(player.team) === Number(teamIndex);
+
+		if (!isAdmin(room, socket.id) && !isCaptainOfTeam) {
 			console.log(`Unauthorized rename-team attempt in room ${roomCode} by ${socket.id}`);
 			return;
 		}
@@ -3391,6 +3412,8 @@ io.on("connection", (socket) => {
 		player.team = null
 		// Mark that this player has opted into the waiting list (visible to others)
 		player.showInWaiting = true
+		// Clear captain status
+		player.isCaptain = false
 
 		// If no one has been assigned as the play-again host yet, assign the first requester
 		if (!room.playAgainHostAssigned) {

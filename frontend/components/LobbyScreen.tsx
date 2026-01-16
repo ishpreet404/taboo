@@ -275,7 +275,8 @@ export default function LobbyScreen() {
   const canStart = team1.length > 0 && team2.length > 0 && (lobbyTeamCount === 2 || team3.length > 0)
 
   const handleSaveEdit = (teamIndex: number) => {
-    if (!isAdmin) return
+    const isCaptain = players.find(p => p.name === playerName)?.isCaptain
+    if (!isAdmin && !(isCaptain && myTeam === teamIndex)) return
     const newName = (editingTeamName || '').trim()
     if (!newName) return
     socket?.emit('rename-team', { roomCode, teamIndex, newName })
@@ -327,6 +328,13 @@ export default function LobbyScreen() {
   // Start captain selection (host/admin)
   const handleStartCaptainSelection = () => {
     if (!isAdmin) return
+
+    if (players.length < 4) {
+      setNotification({ message: 'Need at least 4 players for Team Division.', type: 'warning' })
+      setTimeout(() => setNotification(null), 3000)
+      return
+    }
+
     if (lobbyTeamCount !== 2) {
       // For now only support 2-team Team Division
       setNotification({ message: 'Team Division currently supports 2 teams only.', type: 'warning' })
@@ -518,17 +526,17 @@ export default function LobbyScreen() {
           key={0}
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
-          className="glass-strong rounded-2xl p-4 md:p-6 flex flex-col justify-between min-h-[400px] border-2 border-blue-500/30"
+          className="glass-strong rounded-2xl p-4 md:p-6 flex flex-col justify-between min-h-[300px] md:min-h-[400px] border-2 border-blue-500/30"
         >
           <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
                 {editingTeamIndex === 0 ? (
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <div className="flex items-center gap-2 w-full">
                     <input
                       autoFocus
                       onFocus={(e) => (e.target as HTMLInputElement).select()}
-                      className="flex-1 min-w-0 max-w-full px-3 py-1 rounded-lg bg-white/5 outline-none text-sm text-blue-400 truncate"
+                      className="flex-1 min-w-0 px-3 py-1 rounded-lg bg-white/5 outline-none text-sm text-blue-400"
                       value={editingTeamName}
                       onChange={(e) => setEditingTeamName(e.target.value)}
                       onKeyDown={(e) => {
@@ -537,17 +545,19 @@ export default function LobbyScreen() {
                       }}
                       placeholder="Team 1"
                     />
-                    <button onClick={() => handleSaveEdit(0)} className="flex-shrink-0 px-3 py-1 glass-strong rounded-lg text-sm text-green-300">Save</button>
-                    <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="flex-shrink-0 px-3 py-1 glass rounded-lg text-sm text-gray-300">Cancel</button>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button onClick={() => handleSaveEdit(0)} className="px-3 py-1 glass-strong rounded-lg text-sm text-green-300">Save</button>
+                      <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="px-3 py-1 glass rounded-lg text-sm text-gray-300">Cancel</button>
+                    </div>
                   </div>
                 ) : (
                   <h2 className="text-xl md:text-2xl font-bold text-blue-400 flex items-center gap-2 min-w-0">
-                    <span className="truncate">{teamName(0, 'Team 1')}</span>
-                    {isAdmin && <button title="Edit team name" onClick={() => { setEditingTeamIndex(0); setEditingTeamName(teamName(0, 'Team 1')) }} className="ml-1 p-1 rounded-md hover:bg-white/5 flex-shrink-0"><Edit3 className="w-4 h-4 text-gray-300" /></button>}
+                    <span className="break-words max-w-full">{teamName(0, 'Team 1')}</span>
+                    {(isAdmin || (players.find(p => p.name === playerName)?.isCaptain && myTeam === 0)) && <button title="Edit team name" onClick={() => { setEditingTeamIndex(0); setEditingTeamName(teamName(0, 'Team 1')) }} className="ml-1 p-1 rounded-md hover:bg-white/5 flex-shrink-0"><Edit3 className="w-4 h-4 text-gray-300" /></button>}
                   </h2>
                 )}
               </div>
-              <span className="text-gray-400 text-sm md:text-base ml-3 flex-shrink-0">{team1.length} {team1.length === 1 ? 'player' : 'players'}</span>
+              <span className="text-gray-400 text-xs md:text-base flex-shrink-0 whitespace-nowrap">{team1.length} {team1.length === 1 ? 'player' : 'players'}</span>
             </div>
 
             <div className="space-y-2 md:space-y-3 mb-4">
@@ -589,17 +599,17 @@ export default function LobbyScreen() {
           key={1}
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
-          className="glass-strong rounded-2xl p-4 md:p-6 flex flex-col justify-between min-h-[400px] border-2 border-red-500/30"
+          className="glass-strong rounded-2xl p-4 md:p-6 flex flex-col justify-between min-h-[300px] md:min-h-[400px] border-2 border-red-500/30"
         >
           <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
                 {editingTeamIndex === 1 ? (
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <div className="flex items-center gap-2 w-full">
                     <input
                       autoFocus
                       onFocus={(e) => (e.target as HTMLInputElement).select()}
-                      className="flex-1 min-w-0 max-w-full px-3 py-1 rounded-lg bg-white/5 outline-none text-sm text-red-400 truncate"
+                      className="flex-1 min-w-0 px-3 py-1 rounded-lg bg-white/5 outline-none text-sm text-red-400"
                       value={editingTeamName}
                       onChange={(e) => setEditingTeamName(e.target.value)}
                       onKeyDown={(e) => {
@@ -608,17 +618,19 @@ export default function LobbyScreen() {
                       }}
                       placeholder="Team 2"
                     />
-                    <button onClick={() => handleSaveEdit(1)} className="flex-shrink-0 px-3 py-1 glass-strong rounded-lg text-sm text-green-300">Save</button>
-                    <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="flex-shrink-0 px-3 py-1 glass rounded-lg text-sm text-gray-300">Cancel</button>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button onClick={() => handleSaveEdit(1)} className="px-3 py-1 glass-strong rounded-lg text-sm text-green-300">Save</button>
+                      <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="px-3 py-1 glass rounded-lg text-sm text-gray-300">Cancel</button>
+                    </div>
                   </div>
                 ) : (
                   <h2 className="text-xl md:text-2xl font-bold text-red-400 flex items-center gap-2 min-w-0">
-                    <span className="truncate">{teamName(1, 'Team 2')}</span>
-                    {isAdmin && <button title="Edit team name" onClick={() => { setEditingTeamIndex(1); setEditingTeamName(teamName(1, 'Team 2')) }} className="ml-1 p-1 rounded-md hover:bg-white/5 flex-shrink-0"><Edit3 className="w-4 h-4 text-gray-300" /></button>}
+                    <span className="break-words max-w-full">{teamName(1, 'Team 2')}</span>
+                    {(isAdmin || (players.find(p => p.name === playerName)?.isCaptain && myTeam === 1)) && <button title="Edit team name" onClick={() => { setEditingTeamIndex(1); setEditingTeamName(teamName(1, 'Team 2')) }} className="ml-1 p-1 rounded-md hover:bg-white/5 flex-shrink-0"><Edit3 className="w-4 h-4 text-gray-300" /></button>}
                   </h2>
                 )}
               </div>
-              <span className="text-gray-400 text-sm md:text-base ml-3 flex-shrink-0">{team2.length} {team2.length === 1 ? 'player' : 'players'}</span>
+              <span className="text-gray-400 text-xs md:text-base flex-shrink-0 whitespace-nowrap">{team2.length} {team2.length === 1 ? 'player' : 'players'}</span>
             </div>
 
             <div className="space-y-2 md:space-y-3 mb-4">
@@ -661,17 +673,17 @@ export default function LobbyScreen() {
             key={2}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="glass-strong rounded-2xl p-4 md:p-6 flex flex-col justify-between min-h-[400px] border-2 border-green-500/30"
+            className="glass-strong rounded-2xl p-4 md:p-6 flex flex-col justify-between min-h-[250px] md:min-h-[400px] border-2 border-green-500/30"
           >
             <div>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
                   {editingTeamIndex === 2 ? (
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 w-full">
                       <input
                         autoFocus
                         onFocus={(e) => (e.target as HTMLInputElement).select()}
-                        className="flex-1 min-w-0 max-w-full px-3 py-1 rounded-lg bg-white/5 outline-none text-sm text-green-400 truncate"
+                        className="flex-1 min-w-0 px-3 py-1 rounded-lg bg-white/5 outline-none text-sm text-green-400"
                         value={editingTeamName}
                         onChange={(e) => setEditingTeamName(e.target.value)}
                         onKeyDown={(e) => {
@@ -680,17 +692,19 @@ export default function LobbyScreen() {
                         }}
                         placeholder="Team 3"
                       />
-                      <button onClick={() => handleSaveEdit(2)} className="flex-shrink-0 px-3 py-1 glass-strong rounded-lg text-sm text-green-300">Save</button>
-                      <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="flex-shrink-0 px-3 py-1 glass rounded-lg text-sm text-gray-300">Cancel</button>
+                      <div className="flex gap-1 flex-shrink-0">
+                        <button onClick={() => handleSaveEdit(2)} className="px-3 py-1 glass-strong rounded-lg text-sm text-green-300">Save</button>
+                        <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="px-3 py-1 glass rounded-lg text-sm text-gray-300">Cancel</button>
+                      </div>
                     </div>
                   ) : (
                     <h2 className="text-xl md:text-2xl font-bold text-green-400 flex items-center gap-2 min-w-0">
-                      <span className="truncate">{teamName(2, 'Team 3')}</span>
-                      {isAdmin && <button title="Edit team name" onClick={() => { setEditingTeamIndex(2); setEditingTeamName(teamName(2, 'Team 3')) }} className="ml-1 p-1 rounded-md hover:bg-white/5 flex-shrink-0"><Edit3 className="w-4 h-4 text-gray-300" /></button>}
+                      <span className="break-words max-w-full">{teamName(2, 'Team 3')}</span>
+                      {(isAdmin || (players.find(p => p.name === playerName)?.isCaptain && myTeam === 2)) && <button title="Edit team name" onClick={() => { setEditingTeamIndex(2); setEditingTeamName(teamName(2, 'Team 3')) }} className="ml-1 p-1 rounded-md hover:bg-white/5 flex-shrink-0"><Edit3 className="w-4 h-4 text-gray-300" /></button>}
                     </h2>
                   )}
                 </div>
-                <span className="text-gray-400 text-sm md:text-base ml-3 flex-shrink-0">{team3.length} {team3.length === 1 ? 'player' : 'players'}</span>
+                <span className="text-gray-400 text-xs md:text-base flex-shrink-0 whitespace-nowrap">{team3.length} {team3.length === 1 ? 'player' : 'players'}</span>
               </div>
 
               <div className="space-y-2 md:space-y-3 mb-4">
@@ -788,7 +802,7 @@ export default function LobbyScreen() {
             initial={{ opacity: 0, scale: 0.9, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="glass-strong rounded-3xl p-8 md:p-10 max-w-4xl w-full shadow-2xl border border-white/10"
+            className="glass-strong rounded-3xl p-4 md:p-10 max-w-4xl w-full shadow-2xl border border-white/10"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="text-center mb-8">
@@ -1006,15 +1020,15 @@ export default function LobbyScreen() {
               {/* Show coin flip UI during toss AND when showing result (until picking starts) */}
               {/* Don't show if lastPlayerChoice is active */}
               {draftState.captains && !draftState.currentCaptainId && !draftState.lastPlayerChoice ? (
-                <div className="toss-container flex flex-col items-center gap-8 p-6">
+                <div className="toss-container flex flex-col items-center gap-6 sm:gap-8 p-4 sm:p-6">
                   <h4 className="text-lg font-semibold text-center mb-4">Captains, get ready for the toss!</h4>
 
-                  <div className="captains-row flex items-center justify-center gap-12 md:gap-16">
+                  <div className="captains-row flex flex-col sm:flex-row items-center justify-center gap-8 sm:gap-12 md:gap-16">
                     <div className="captain-card text-center">
                       <div className="w-20 h-20 mx-auto mb-3 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-3xl font-bold text-white shadow-lg">
                         {players.find(p => p.id === draftState.captains[0])?.name.charAt(0).toUpperCase()}
                       </div>
-                      <div className="text-blue-300 font-bold text-lg mb-1">
+                      <div className="text-blue-300 font-bold text-lg mb-1 break-words max-w-[150px] mx-auto">
                         {players.find(p => p.id === draftState.captains[0])?.name}
                       </div>
                       <div className="text-sm text-gray-400">{teamName(0, 'Team 1')}</div>
@@ -1075,7 +1089,7 @@ export default function LobbyScreen() {
                       <div className="w-20 h-20 mx-auto mb-3 bg-gradient-to-br from-red-500 to-red-700 rounded-full flex items-center justify-center text-3xl font-bold text-white shadow-lg">
                         {players.find(p => p.id === draftState.captains[1])?.name.charAt(0).toUpperCase()}
                       </div>
-                      <div className="text-red-300 font-bold text-lg mb-1">
+                      <div className="text-red-300 font-bold text-lg mb-1 break-words max-w-[150px] mx-auto">
                         {players.find(p => p.id === draftState.captains[1])?.name}
                       </div>
                       <div className="text-sm text-gray-400">{teamName(1, 'Team 2')}</div>

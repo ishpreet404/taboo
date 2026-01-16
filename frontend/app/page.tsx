@@ -5,9 +5,10 @@ import GameOverScreen from '@/components/GameOverScreen'
 import GameScreen from '@/components/GameScreen'
 import LobbyScreen from '@/components/LobbyScreen'
 import RoomScreen from '@/components/RoomScreen'
+import { AnimatePresence, motion } from 'framer-motion'
 
 function GameContent() {
-  const { currentScreen, notification, isReconnecting } = useGame()
+  const { currentScreen, notifications, isReconnecting } = useGame()
 
   // Show loading screen while attempting to reconnect to a previous session
   if (isReconnecting) {
@@ -33,22 +34,33 @@ function GameContent() {
         {currentScreen === 'gameover' && <GameOverScreen />}
       </div>
 
-      {/* Global notification display */}
-      {notification && (
-        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 animate-fade-in w-11/12 sm:w-auto">
-          <div className={`glass-strong rounded-xl px-8 py-4 border-2 shadow-2xl min-w-[400px] max-w-2xl ${notification.type === 'success' ? 'border-green-500/50 bg-green-500/10' :
-            notification.type === 'warning' ? 'border-yellow-500/50 bg-yellow-500/10' :
-              'border-cyan-500/50 bg-cyan-500/10'
-            }`}>
-            <div className={`text-center font-semibold text-base sm:text-lg whitespace-pre-line ${notification.type === 'success' ? 'text-green-300' :
-              notification.type === 'warning' ? 'text-yellow-300' :
-                'text-cyan-300'
-              }`}>
-              {notification.message}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Global notification display - stacked */}
+      <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 flex flex-col gap-3 w-11/12 sm:w-auto items-center pointer-events-none">
+        <AnimatePresence>
+          {notifications.map((notif) => (
+            <motion.div
+              key={notif.id}
+              initial={{ opacity: 0, y: -20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+              className="pointer-events-auto"
+            >
+              <div className={`glass-strong rounded-xl px-8 py-4 border-2 shadow-2xl min-w-[300px] md:min-w-[400px] max-w-2xl ${notif.type === 'success' ? 'border-green-500/50 bg-green-500/10' :
+                notif.type === 'warning' ? 'border-yellow-500/50 bg-yellow-500/10' :
+                  'border-cyan-500/50 bg-cyan-500/10'
+                }`}>
+                <div className={`text-center font-semibold text-base sm:text-lg whitespace-pre-line ${notif.type === 'success' ? 'text-green-300' :
+                  notif.type === 'warning' ? 'text-yellow-300' :
+                    'text-cyan-300'
+                  }`}>
+                  {notif.message}
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
     </main>
   )
 }

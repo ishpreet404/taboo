@@ -24,7 +24,6 @@ export default function GameScreen() {
   const [bonusWordCount, setBonusWordCount] = useState(0)
   const [bonusMilestones, setBonusMilestones] = useState<number[]>([6, 10, 14, 18, 22]) // Next bonus at 6, then 10, 14, 18, 22...
   const [showHostMenu, setShowHostMenu] = useState<{ teamIndex: number; playerIndex: number } | null>(null)
-  const [notification, setNotification] = useState<{ message: string; type: 'info' | 'warning' | 'success' } | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null)
   const [showTeamSelectModal, setShowTeamSelectModal] = useState(false)
   const [autoAdvanceCountdown, setAutoAdvanceCountdown] = useState(30)
@@ -211,8 +210,8 @@ export default function GameScreen() {
         const newDescriber = data.gameState.teams[data.gameState.currentTeamIndex].players[
           data.gameState.currentDescriberIndex[data.gameState.currentTeamIndex]
         ]
-        setNotification({ message: `${data.message}\nNext describer: ${newDescriber}`, type: 'info' })
-        setTimeout(() => setNotification(null), 4000)
+        setGlobalNotification({ message: `${data.message}\nNext describer: ${newDescriber}`, type: 'info' })
+        setTimeout(() => setGlobalNotification(null), 4000)
       }
       // Reset to turn-start phase for the new describer
       setGamePhase('turn-start')
@@ -234,8 +233,8 @@ export default function GameScreen() {
     }
 
     const handleDescriberLeft = (data: any) => {
-      setNotification({ message: data.message, type: 'warning' })
-      setTimeout(() => setNotification(null), 4000)
+      setGlobalNotification({ message: data.message, type: 'warning' })
+      setTimeout(() => setGlobalNotification(null), 4000)
       // Reset to turn-start phase for new describer
       setGamePhase('turn-start')
       setGuessedWords([])
@@ -246,7 +245,7 @@ export default function GameScreen() {
     }
 
     const handleHostLeft = () => {
-      setNotification({ message: 'Host has left. Room is closing.', type: 'warning' })
+      setGlobalNotification({ message: 'Host has left. Room is closing.', type: 'warning' })
       setTimeout(() => leaveGame(), 2000)
     }
 
@@ -260,8 +259,8 @@ export default function GameScreen() {
     }
 
     const handleTeamEmptySkip = (data: any) => {
-      setNotification({ message: data.message, type: 'info' })
-      setTimeout(() => setNotification(null), 4000)
+      setGlobalNotification({ message: data.message, type: 'info' })
+      setTimeout(() => setGlobalNotification(null), 4000)
       // Game continues with the other team
       setGamePhase('turn-start')
       setGuessedWords([])
@@ -325,8 +324,8 @@ export default function GameScreen() {
 
     const handleGuessRejected = (data: any) => {
       // Show notification when guess is rejected due to timing
-      setNotification({ message: data.message || "Your guess arrived too late!", type: 'warning' })
-      setTimeout(() => setNotification(null), 3000)
+      setGlobalNotification({ message: data.message || "Your guess arrived too late!", type: 'warning' })
+      setTimeout(() => setGlobalNotification(null), 3000)
     }
 
     const handleGracePeriodStart = () => {
@@ -370,8 +369,8 @@ export default function GameScreen() {
 
         // Only show notification to watching teams (NOT to describer's team)
         if (data.newlyConfirmed && !isPlayerOnCurrentTeam) {
-          setNotification({ message: `"${data.newlyConfirmed}" reported as potential TABOO! 🚫`, type: 'warning' })
-          setTimeout(() => setNotification(null), 3000)
+          setGlobalNotification({ message: `"${data.newlyConfirmed}" reported as potential TABOO! 🚫`, type: 'warning' })
+          setTimeout(() => setGlobalNotification(null), 3000)
         }
         // Track the taboo word with its points for turn-end voting
         if (data.newlyConfirmed && data.wordPoints !== undefined) {
@@ -447,17 +446,17 @@ export default function GameScreen() {
 
       // Show notification
       if (confirmedWords.length > 0) {
-        setNotification({
+        setGlobalNotification({
           message: `${confirmedWords.length} word${confirmedWords.length !== 1 ? 's' : ''} confirmed as TABOO! 🚫`,
           type: 'warning'
         })
-        setTimeout(() => setNotification(null), 3000)
+        setTimeout(() => setGlobalNotification(null), 3000)
       } else if (failedWords.length > 0) {
-        setNotification({
+        setGlobalNotification({
           message: `${failedWords.length} taboo report${failedWords.length !== 1 ? 's' : ''} dismissed by vote`,
           type: 'info'
         })
-        setTimeout(() => setNotification(null), 3000)
+        setTimeout(() => setGlobalNotification(null), 3000)
       }
     }
 
@@ -813,8 +812,8 @@ export default function GameScreen() {
       })
 
       // Show notification about partial match
-      setNotification({ message: `Close enough! "${input}" → "${partialMatch.wordObj.word}" (${partialPoints} points)`, type: 'success' })
-      setTimeout(() => setNotification(null), 3000)
+      setGlobalNotification({ message: `Close enough! "${input}" → "${partialMatch.wordObj.word}" (${partialPoints} points)`, type: 'success' })
+      setTimeout(() => setGlobalNotification(null), 3000)
       return
     }
 
@@ -896,11 +895,13 @@ export default function GameScreen() {
   }
 
   const handleSkipTurn = () => {
-    if (!isMyTurn) {
-      // Emit skip-guesser-turn event to server
-      socket?.emit('skip-guesser-turn', { roomCode, playerName })
-      setNotification({ message: 'You have skipped your guessing turn!', type: 'info' })
-      setTimeout(() => setNotification(null), 3000)
+    if (isMyTurn) {
+      if (currentWords.length > 0) {
+        socket?.emit('skip-word', { roomCode, playerName })
+      } else {
+        setGlobalNotification({ message: "No more words to skip!", type: 'warning' })
+        setTimeout(() => setGlobalNotification(null), 3000)
+      }
     }
   }
 
@@ -934,21 +935,23 @@ export default function GameScreen() {
   }
 
   const handleMakeDescriber = (teamIndex: number, playerIndex: number) => {
-    if (!isAdmin) return
+    const isCaptain = players.find(p => p.name === playerName)?.isCaptain
+    if (!isAdmin && !(isCaptain && myTeam === teamIndex)) return
     socket?.emit('set-describer', { roomCode, teamIndex, playerIndex })
     setShowHostMenu(null)
   }
 
   const handleSaveEdit = (teamIndex: number) => {
-    if (!isAdmin) return
-    if (!editingTeamName || editingTeamName.trim().length === 0) {
-      setNotification({ message: 'Team name cannot be empty', type: 'warning' })
-      setTimeout(() => setNotification(null), 2000)
+    const isCaptain = players.find(p => p.name === playerName)?.isCaptain
+    if (!isAdmin && !(isCaptain && myTeam === teamIndex)) return
+    if (editingTeamName === '' || editingTeamName.trim() === '') {
+      setGlobalNotification({ message: 'Please enter a team name.', type: 'warning' })
+      setTimeout(() => setGlobalNotification(null), 3000)
       return
     }
-    socket?.emit('rename-team', { roomCode, teamIndex, newName: editingTeamName.trim() })
-    setNotification({ message: 'Renaming team...', type: 'info' })
-    setTimeout(() => setNotification(null), 1500)
+    socket?.emit('rename-team', { roomCode, teamIndex, newName: editingTeamName })
+    setGlobalNotification({ message: `Team name updated to ${editingTeamName}`, type: 'success' })
+    setTimeout(() => setGlobalNotification(null), 3000)
     setEditingTeamIndex(null)
     setEditingTeamName('')
   }
@@ -968,8 +971,8 @@ export default function GameScreen() {
   const copyRoomCode = () => {
     if (roomCode) {
       navigator.clipboard.writeText(roomCode)
-      setNotification({ message: 'Room code copied to clipboard!', type: 'success' })
-      setTimeout(() => setNotification(null), 2000)
+      setGlobalNotification({ message: 'Room code copied to clipboard!', type: 'success' })
+      setTimeout(() => setGlobalNotification(null), 2000)
     }
   }
 
@@ -983,15 +986,9 @@ export default function GameScreen() {
       // Simple toggle for 2 teams
       const newTeam = myTeam === 0 ? 1 : 0
       joinTeam(newTeam)
-      setNotification({ message: `Switched to Team ${newTeam + 1}`, type: 'info' })
-      setTimeout(() => setNotification(null), 2000)
+      setGlobalNotification({ message: `Switched to Team ${newTeam + 1}`, type: 'success' })
+      setTimeout(() => setGlobalNotification(null), 2000)
     } else {
-      // Show modal for 3 teams
-      // If this player is the describer and it's turn-end phase, auto-advance to next turn
-      if (isMyTurn && gamePhase === 'turn-end') {
-        handleNextTurnButton()
-      }
-
       setShowTeamSelectModal(true)
     }
   }
@@ -999,8 +996,8 @@ export default function GameScreen() {
   const handleSelectTeam = (teamIndex: number) => {
     joinTeam(teamIndex)
     setShowTeamSelectModal(false)
-    setNotification({ message: `Switched to Team ${teamIndex + 1}`, type: 'info' })
-    setTimeout(() => setNotification(null), 2000)
+    setGlobalNotification({ message: `Joined Team ${teamIndex + 1}`, type: 'success' })
+    setTimeout(() => setGlobalNotification(null), 2000)
   }
 
   const handleAdminSkipTurn = () => {
@@ -1047,9 +1044,9 @@ export default function GameScreen() {
       }
 
       const fullFeedback = feedbackParts.join(' | ')
-      submitWordFeedback(feedbackModal.word, fullFeedback, feedbackModal.difficulty)
-      setNotification({ message: 'Feedback submitted! Thank you for helping improve the word list.', type: 'success' })
-      setTimeout(() => setNotification(null), 3000)
+      submitWordFeedback(feedbackModal.word, feedbackOptions.wordTooDifficult ? 'hard' : (feedbackOptions.changeDifficultyTo || ''), feedbackText)
+      setGlobalNotification({ message: 'Feedback submitted! Thank you.', type: 'success' })
+      setTimeout(() => setGlobalNotification(null), 3000)
       setFeedbackModal(null)
       setFeedbackText('')
       setFeedbackOptions({ changeDifficultyTo: null, wordTooDifficult: false })
@@ -1081,8 +1078,8 @@ export default function GameScreen() {
     if (suggestionSubmitting || suggestionSubmitted) return
     // If we've already checked and the word exists, block submit
     if (suggestionCheckResult && suggestionCheckResult.exists) {
-      setNotification({ message: `"${suggestionCheckResult.word}" already exists in the database.`, type: 'warning' })
-      setTimeout(() => setNotification(null), 3000)
+      setGlobalNotification({ message: `"${suggestionCheckResult.word}" already exists in the dictionary!`, type: 'warning' })
+      setTimeout(() => setGlobalNotification(null), 4000)
       return
     }
     setSuggestionSubmitting(true)
@@ -1101,9 +1098,8 @@ export default function GameScreen() {
         setSuggestionCheckResult({ exists: payload.exists, word: payload.word })
         setSuggestionSubmitting(false)
         setSuggestionSubmitted(true)
-        // show a small inline confirmation
-        setNotification({ message: `Suggestion recorded: "${payload.word}"`, type: 'success' })
-        setTimeout(() => setNotification(null), 3000)
+        setGlobalNotification({ message: 'Word suggestion submitted successfully!', type: 'success' })
+        setTimeout(() => setGlobalNotification(null), 4000)
       } else {
         setSuggestionSubmitting(false)
       }
@@ -1116,42 +1112,6 @@ export default function GameScreen() {
     }
   }, [socket])
 
-  // Debounced live-check while typing — wordSet lookup server-side is O(1), so per-keystroke debounced checks are fine
-  useEffect(() => {
-    if (!socket) return
-    if (!suggestionText.trim()) {
-      setSuggestionCheckResult(null)
-      setSuggestionChecking(false)
-      return
-    }
-
-    setSuggestionChecking(true)
-    const id = setTimeout(() => {
-      socket.emit('check-word-exists', { word: suggestionText.trim().toLowerCase() })
-    }, 400)
-
-    return () => clearTimeout(id)
-  }, [suggestionText, socket])
-
-  // Get other difficulty options based on current difficulty
-  const getOtherDifficulties = (currentDifficulty: string): string[] => {
-    const difficulties = ['easy', 'medium', 'hard']
-    return difficulties.filter(d => d !== currentDifficulty)
-  }
-
-  const handleToggleTeamSwitching = () => {
-    if (!isAdmin) return
-    socket?.emit('admin-toggle-team-switching', { roomCode })
-    setShowAdminPanel(false)
-  }
-
-  const handleToggleTeamLock = () => {
-    if (!isAdmin) return
-    socket?.emit('admin-toggle-team-switching', { roomCode })
-    setShowAdminPanel(false)
-  }
-
-  // Toggle co-admin status - no confirmation needed
   const handleToggleCoAdmin = (targetPlayerName: string) => {
     if (!isHost) return
     socket?.emit('toggle-co-admin', { roomCode, playerName: targetPlayerName })
@@ -1168,6 +1128,22 @@ export default function GameScreen() {
     const addTeam = gameState.teamCount !== 3 // Add if currently 2 teams, remove if 3 teams
     socket?.emit('admin-toggle-third-team', { roomCode, addTeam })
     setShowAdminPanel(false)
+  }
+  const handleToggleTeamSwitching = () => {
+    if (!isAdmin) return
+    socket?.emit('admin-toggle-team-switching', { roomCode })
+    setShowAdminPanel(false)
+  }
+
+  const handleToggleTeamLock = () => {
+    if (!isAdmin) return
+    socket?.emit('admin-toggle-team-lock', { roomCode })
+    setShowAdminPanel(false)
+  }
+
+  const getOtherDifficulties = (currentDifficulty: string): string[] => {
+    const difficulties = ['easy', 'medium', 'hard']
+    return difficulties.filter(d => d !== currentDifficulty)
   }
 
   return (
@@ -1399,7 +1375,7 @@ export default function GameScreen() {
                             <h5 className={`font-semibold mb-0 text-sm ${teamColor}`}>{team.name}</h5>
                           )}
 
-                          {isAdmin && editingTeamIndex !== teamIndex && (
+                          {(isAdmin || (players.find(p => p.name === playerName)?.isCaptain && myTeam === teamIndex)) && editingTeamIndex !== teamIndex && (
                             <button
                               onClick={() => { setEditingTeamIndex(teamIndex); setEditingTeamName(team.name) }}
                               title="Edit team name"
@@ -1417,7 +1393,7 @@ export default function GameScreen() {
                                 key={playerIndex}
                                 className="flex items-center justify-between glass-strong rounded-lg p-3"
                               >
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
                                   <span className="text-sm">{player}</span>
                                   {gameState.currentDescriberIndex?.[teamIndex] === playerIndex && (
                                     <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full">
@@ -1447,7 +1423,7 @@ export default function GameScreen() {
                                     </span>
                                   )}
                                 </div>
-                                <div className="flex flex-row items-center gap-1 justify-end">
+                                <div className="flex flex-row items-center gap-1 justify-end flex-shrink-0 ml-2">
                                   {/* Don't show make describer button if already the describer */}
                                   {gameState.currentDescriberIndex?.[teamIndex] !== playerIndex && (
                                     <button
@@ -1644,22 +1620,22 @@ export default function GameScreen() {
         {/* Main Content - Full Width */}
         <div className="space-y-4 mt-8 sm:mt-0">
           {/* Header - Scores and Team Players */}
-          <div className={`grid ${gameState.teamCount === 3 ? 'grid-cols-3' : 'grid-cols-2'} gap-3 md:gap-4`}>
+          <div className={`grid grid-cols-1 ${gameState.teamCount === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-3 md:gap-4`}>
             {gameState.teams.map((team, teamIndex) => {
               const teamColors = ['blue', 'red', 'green'];
               const teamColor = teamColors[teamIndex];
 
               return (
-                <div key={teamIndex} className={`glass-strong rounded-lg p-3 md:p-4 border border-${teamColor}-500/20`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
+                <div key={teamIndex} className={`glass-strong rounded-lg p-3 md:p-4 border border-${teamColor}-500/20 relative ${showHostMenu?.teamIndex === teamIndex ? 'z-50' : 'z-10'}`}>
+                  <div className="flex items-center justify-between mb-2 gap-2">
+                    <div className="min-w-0 flex-1">
                       <div className="text-xs md:text-sm text-gray-400 font-medium uppercase tracking-wide">
                         {editingTeamIndex === teamIndex ? (
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 w-full">
                             <input
                               autoFocus
                               onFocus={(e) => (e.target as HTMLInputElement).select()}
-                              className={`px-2 py-1 rounded-lg bg-white/5 outline-none text-xs ${teamColor}`}
+                              className={`flex-1 min-w-0 px-2 py-1 rounded-lg bg-white/5 outline-none text-xs ${teamColor}`}
                               value={editingTeamName}
                               onChange={(e) => setEditingTeamName(e.target.value)}
                               onKeyDown={(e) => {
@@ -1668,17 +1644,19 @@ export default function GameScreen() {
                               }}
                               placeholder={`Team ${teamIndex + 1}`}
                             />
-                            <button onClick={() => handleSaveEdit(teamIndex)} className="px-2 py-1 glass-strong rounded-lg text-xs text-green-300">Save</button>
-                            <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="px-2 py-1 glass rounded-lg text-xs text-gray-300">Cancel</button>
+                            <div className="flex gap-1 flex-shrink-0">
+                              <button onClick={() => handleSaveEdit(teamIndex)} className="px-2 py-1 glass-strong rounded-lg text-xs text-green-300">Save</button>
+                              <button onClick={() => { setEditingTeamIndex(null); setEditingTeamName('') }} className="px-2 py-1 glass rounded-lg text-xs text-gray-300">Cancel</button>
+                            </div>
                           </div>
                         ) : (
-                          <div className="flex items-center gap-2">
-                            <div>{team.name}</div>
-                            {isAdmin && (
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div className="break-words line-clamp-2">{team.name}</div>
+                            {(isAdmin || (players.find(p => p.name === playerName)?.isCaptain && myTeam === teamIndex)) && (
                               <button
                                 title="Edit team name"
                                 onClick={() => { setEditingTeamIndex(teamIndex); setEditingTeamName(team.name) }}
-                                className="ml-1 p-1 rounded-md hover:bg-white/5"
+                                className="flex-shrink-0 p-1 rounded-md hover:bg-white/5"
                               >
                                 <Edit3 className="w-4 h-4 text-gray-300" />
                               </button>
@@ -1690,23 +1668,23 @@ export default function GameScreen() {
                         {team.score}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 text-gray-300">
-                      <div className="flex items-center gap-1 text-sm md:text-base">
-                        <TrophyIcon className={`w-5 h-5 md:w-6 md:h-6 text-yellow-300 opacity-80`} />
+                    <div className="flex items-center gap-2 md:gap-3 text-gray-300 flex-shrink-0">
+                      <div className="flex items-center gap-1 text-xs md:text-base">
+                        <TrophyIcon className={`w-4 h-4 md:w-6 md:h-6 text-yellow-300 opacity-80`} />
                         <span className={`font-semibold text-${teamColor}-300`}>{teamStats?.wins?.[teamIndex] ?? 0}</span>
                       </div>
-                      <div className="flex items-center gap-1 text-sm md:text-base">
-                        <Handshake className={`w-5 h-5 md:w-6 md:h-6 text-gray-300 opacity-80`} />
+                      <div className="flex items-center gap-1 text-xs md:text-base">
+                        <Handshake className={`w-4 h-4 md:w-6 md:h-6 text-gray-300 opacity-80`} />
                         <span className={`font-semibold text-${teamColor}-300`}>{teamStats?.ties?.[teamIndex] ?? 0}</span>
                       </div>
-                      <div className="flex items-center gap-1 text-sm md:text-base">
-                        <XCircle className={`w-5 h-5 md:w-6 md:h-6 text-red-400 opacity-80`} />
+                      <div className="flex items-center gap-1 text-xs md:text-base">
+                        <XCircle className={`w-4 h-4 md:w-6 md:h-6 text-red-400 opacity-80`} />
                         <span className={`font-semibold text-${teamColor}-300`}>{teamStats?.losses?.[teamIndex] ?? 0}</span>
                       </div>
                       {(teamStats?.streaks?.[teamIndex] ?? 0) > 1 && (
-                        <div className="glare-badge ml-2 px-2 py-0.5 bg-yellow-400/10 text-yellow-300 rounded-full text-xs font-semibold flex items-center gap-1 ring-1 ring-yellow-300/20">
-                          <span className="text-sm">🔥</span>
-                          <span className="text-xs font-semibold">{teamStats?.streaks?.[teamIndex]}</span>
+                        <div className="glare-badge ml-1 md:ml-2 px-1.5 md:px-2 py-0.5 bg-yellow-400/10 text-yellow-300 rounded-full text-[10px] md:text-xs font-semibold flex items-center gap-0.5 md:gap-1 ring-1 ring-yellow-300/20">
+                          <span className="text-xs md:text-sm">🔥</span>
+                          <span>{teamStats?.streaks?.[teamIndex]}</span>
                         </div>
                       )}
                     </div>
@@ -1719,15 +1697,17 @@ export default function GameScreen() {
                         const isDescriber = gameState.currentTeamIndex === teamIndex &&
                           gameState.currentDescriberIndex[teamIndex] === idx;
                         const isMenuOpen = showHostMenu?.teamIndex === teamIndex && showHostMenu?.playerIndex === idx;
+                        const isCaptain = players.find(p => p.name === playerName)?.isCaptain;
+                        const canManageTeam = isHost || (isCaptain && myTeam === teamIndex);
                         return (
-                          <div key={player} className="relative">
+                          <div key={player} className={`relative ${isMenuOpen ? 'z-50' : 'z-auto'}`}>
                             <button
-                              onClick={() => isHost ? setShowHostMenu(isMenuOpen ? null : { teamIndex, playerIndex: idx }) : null}
-                              disabled={!isHost || player === playerName}
+                              onClick={() => (canManageTeam && player !== playerName) ? setShowHostMenu(isMenuOpen ? null : { teamIndex, playerIndex: idx }) : null}
+                              disabled={!canManageTeam || player === playerName}
                               className={`text-xs px-2 py-0.5 rounded ${isDescriber
                                 ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                                 : `bg-${teamColor}-500/10 text-${teamColor}-300`
-                                } ${isHost && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
+                                } ${canManageTeam && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
                             >
                               <div className="flex items-center gap-1">
                                 {player}
@@ -1738,26 +1718,30 @@ export default function GameScreen() {
                             </button>
 
                             {/* Host Menu */}
-                            {isHost && isMenuOpen && player !== playerName && (
-                              <div className="absolute top-full left-0 mt-1 z-30 glass-strong rounded-lg border border-white/20 overflow-hidden shadow-xl min-w-[140px]">
+                            {(isHost || (isCaptain && myTeam === teamIndex)) && isMenuOpen && player !== playerName && (
+                              <div className="absolute top-full left-0 mt-1 z-50 glass-strong rounded-lg border border-white/20 overflow-hidden shadow-xl min-w-[140px]">
                                 <button
                                   onClick={() => handleMakeDescriber(teamIndex, idx)}
                                   className="w-full px-3 py-2 text-left text-xs hover:bg-purple-500/20 text-purple-300 transition-colors"
                                 >
                                   📢 Make Describer
                                 </button>
-                                <button
-                                  onClick={() => handleKickPlayer(player, false)}
-                                  className="w-full px-3 py-2 text-left text-xs hover:bg-orange-500/20 text-orange-400 transition-colors"
-                                >
-                                  ⚠️ Kick Player
-                                </button>
-                                <button
-                                  onClick={() => handleKickPlayer(player, true)}
-                                  className="w-full px-3 py-2 text-left text-xs hover:bg-red-500/20 text-red-400 transition-colors"
-                                >
-                                  🚫 Ban Player
-                                </button>
+                                {isHost && (
+                                  <>
+                                    <button
+                                      onClick={() => handleKickPlayer(player, false)}
+                                      className="w-full px-3 py-2 text-left text-xs hover:bg-orange-500/20 text-orange-400 transition-colors"
+                                    >
+                                      ⚠️ Kick Player
+                                    </button>
+                                    <button
+                                      onClick={() => handleKickPlayer(player, true)}
+                                      className="w-full px-3 py-2 text-left text-xs hover:bg-red-500/20 text-red-400 transition-colors"
+                                    >
+                                      🚫 Ban Player
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1796,7 +1780,7 @@ export default function GameScreen() {
           {
             gamePhase === 'turn-start' && (
               <div className="glass-strong rounded-xl sm:rounded-2xl p-4 sm:p-6 md:p-8 text-center border border-white/10">
-                <div className={`text-3xl sm:text-4xl md:text-6xl mb-3 sm:mb-4 font-extrabold ${gameState.currentTeamIndex === 0 ? 'text-blue-400' :
+                <div className={`text-3xl sm:text-4xl md:text-6xl mb-3 sm:mb-4 font-extrabold px-2 break-words ${gameState.currentTeamIndex === 0 ? 'text-blue-400' :
                   gameState.currentTeamIndex === 1 ? 'text-red-400' :
                     'text-green-400'
                   }`}>
@@ -2151,8 +2135,8 @@ export default function GameScreen() {
           {
             gamePhase === 'turn-end' && (
               <div className="glass-strong rounded-xl sm:rounded-2xl p-4 sm:p-6 md:p-8 text-center border border-yellow-500/30">
-                <div className="text-2xl sm:text-3xl md:text-4xl font-bold mb-4 sm:mb-6 text-yellow-400">
-                  Turn Complete!
+                <div className="text-xl sm:text-3xl md:text-4xl font-bold mb-4 sm:mb-6 text-yellow-400 break-words px-2">
+                  {currentTeam?.name || 'Team'} Finished!
                 </div>
 
                 {/* Next Turn Button - Moved to top */}
@@ -2368,24 +2352,6 @@ export default function GameScreen() {
           </div>
         )}
 
-        {/* Custom Notification */}
-        {
-          notification && (
-            <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 animate-fade-in w-11/12 sm:w-auto">
-              <div className={`glass-strong rounded-xl px-8 py-4 border-2 shadow-2xl min-w-[400px] max-w-2xl ${notification.type === 'success' ? 'border-green-500/50 bg-green-500/10' :
-                notification.type === 'warning' ? 'border-yellow-500/50 bg-yellow-500/10' :
-                  'border-cyan-500/50 bg-cyan-500/10'
-                }`}>
-                <div className={`text-center font-semibold text-base sm:text-lg whitespace-pre-line ${notification.type === 'success' ? 'text-green-300' :
-                  notification.type === 'warning' ? 'text-yellow-300' :
-                    'text-cyan-300'
-                  }`}>
-                  {notification.message}
-                </div>
-              </div>
-            </div>
-          )
-        }
 
         {/* Bonus Words Notification */}
         {

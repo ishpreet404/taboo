@@ -1,7 +1,8 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { AlertTriangle, Home, Medal, RotateCw, Star, Trophy } from 'lucide-react'
+import { AlertTriangle, Heart, Home, Medal, RotateCw, Star, Trophy } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { useGame } from './GameContext'
 
 interface PlayerContribution {
@@ -15,6 +16,7 @@ interface PlayerContribution {
 
 export default function GameOverScreen() {
   const { gameState, setCurrentScreen, leaveGame, socket, roomCode, isAdmin, playAgainProcessing, setNotification, localPlayerPlayAgain } = useGame()
+  const router = useRouter()
 
   // Get taboo deductions per team
   const tabooDeductionsByTeam = gameState.confirmedTaboosByTeam || {}
@@ -63,7 +65,7 @@ export default function GameOverScreen() {
             >
               🏆
             </motion.div>
-            <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-yellow-400 to-orange-500 bg-clip-text text-transparent">
+            <h1 className="text-3xl sm:text-5xl font-bold mb-4 bg-gradient-to-r from-yellow-400 to-orange-500 bg-clip-text text-transparent break-words px-4">
               {winner.name} Wins!
             </h1>
             <p className="text-2xl text-gray-300">{winner.effectiveScore} Points</p>
@@ -78,14 +80,14 @@ export default function GameOverScreen() {
             <motion.div
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
-              className="text-8xl mb-6"
+              className="text-6xl sm:text-8xl mb-6"
             >
               🤝
             </motion.div>
-            <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
+            <h1 className="text-4xl sm:text-5xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
               It's a Tie!
             </h1>
-            <p className="text-2xl text-gray-300">
+            <p className="text-xl sm:text-2xl text-gray-300 px-4 break-words">
               {sortedTeams.map(t => t.effectiveScore).join(' - ')}
             </p>
           </>
@@ -105,7 +107,7 @@ export default function GameOverScreen() {
               initial={{ x: team.originalIndex % 2 === 0 ? -50 : 50, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               transition={{ delay: 0.2 }}
-              className={`glass-strong rounded-2xl p-8 border-2 ${isWinner ? 'border-yellow-500 bg-yellow-500/10' : `border-${teamColorName}-500/30`
+              className={`glass-strong rounded-2xl p-4 sm:p-8 border-2 ${isWinner ? 'border-yellow-500 bg-yellow-500/10' : `border-${teamColorName}-500/30`
                 }`}
             >
               <div className="flex items-center justify-between mb-4">
@@ -114,10 +116,10 @@ export default function GameOverScreen() {
               </div>
 
               {/* Score Display - Always show both raw and final */}
-              <div className="flex items-end gap-4 mb-3">
+              <div className="flex items-end gap-3 sm:gap-4 mb-3">
                 <div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wide">Final Score</div>
-                  <div className="text-5xl font-bold text-white">{team.effectiveScore}</div>
+                  <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide">Final Score</div>
+                  <div className="text-3xl sm:text-5xl font-bold text-white">{team.effectiveScore}</div>
                 </div>
                 <div className="pb-1">
                   <div className="text-xs text-gray-500 uppercase tracking-wide">Raw</div>
@@ -175,14 +177,14 @@ export default function GameOverScreen() {
                 transition={{ delay: 0.5 + index * 0.05 }}
                 className="glass rounded-xl p-4 flex items-center justify-between"
               >
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 min-w-0">
                   <div className="flex items-center gap-2">
                     {index === 0 && <Medal className="w-6 h-6 text-yellow-400" />}
                     {index === 1 && <Medal className="w-6 h-6 text-gray-400" />}
                     {index === 2 && <Medal className="w-6 h-6 text-orange-600" />}
                     {index > 2 && <span className="w-6 text-center text-gray-400">#{index + 1}</span>}
                   </div>
-                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-500 rounded-full flex items-center justify-center text-lg font-bold">
+                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-500 rounded-full flex items-center justify-center text-lg font-bold flex-shrink-0">
                     {player.name.charAt(0).toUpperCase()}
                   </div>
                   <div>
@@ -250,6 +252,64 @@ export default function GameOverScreen() {
             <Home className="w-6 h-6" />
             Back to Home
           </button>
+        </div>
+      </motion.div>
+
+      {/* Support & Community Section */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.8 }}
+        className="mt-16 pt-8 border-t border-white/10"
+      >
+        <div className="flex flex-col md:flex-row items-center justify-between gap-8 md:gap-12 glass-strong rounded-3xl p-6 md:p-8 bg-gradient-to-br from-white/5 to-transparent border border-white/10 shadow-2xl">
+          <div className="flex-1 text-center md:text-left">
+            <h3 className="text-xl font-bold text-white mb-2 flex items-center justify-center md:justify-start gap-2">
+              <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
+              Enjoyed playing?
+            </h3>
+            <p className="text-gray-400 text-sm md:text-base">
+              Join our community or support the developers to keep the game running! ✨
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-6">
+            {/* Discord Link */}
+            <a
+              href="https://discord.gg/hemVkeHYmM"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center group transition-all"
+              title="Join our Discord"
+            >
+              <div className="p-4 bg-indigo-500/10 group-hover:bg-indigo-500/20 rounded-2xl border border-indigo-500/30 transition-all">
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, repeatDelay: 2, ease: "easeInOut" }}
+                >
+                  <img src="https://cdn.jsdelivr.net/npm/simple-icons@v9/icons/discord.svg" alt="Discord" className="w-8 h-8" style={{ filter: 'invert(1)' }} />
+                </motion.div>
+              </div>
+            </a>
+
+            {/* Support Us Button */}
+            <motion.button
+              onClick={() => router.push('/donate')}
+              animate={{
+                scale: [1, 1.05, 1],
+                boxShadow: [
+                  '0 0 15px rgba(236, 72, 153, 0.2)',
+                  '0 0 30px rgba(236, 72, 153, 0.5)',
+                  '0 0 15px rgba(236, 72, 153, 0.2)'
+                ]
+              }}
+              transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
+              className="px-8 py-4 bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-600 hover:to-red-600 rounded-2xl font-bold text-white transition-all transform hover:scale-110 flex items-center gap-3 shadow-xl shadow-pink-500/30"
+            >
+              <Heart className="w-5 h-5 fill-white" />
+              <span>Support Us</span>
+            </motion.button>
+          </div>
         </div>
       </motion.div>
     </div>
