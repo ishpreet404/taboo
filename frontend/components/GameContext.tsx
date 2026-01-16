@@ -10,6 +10,7 @@ interface Player {
   name: string
   team: number | null
   showInWaiting?: boolean
+  isCaptain?: boolean
 }
 
 interface WordObject {

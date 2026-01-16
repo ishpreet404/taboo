@@ -1,11 +1,11 @@
 'use client'
 
-import { Clock, Copy, Edit3, Handshake, Info, Lock, LogOut, MessageSquare, RefreshCw, Settings, Shield, Shuffle, SkipForward, Trophy as TrophyIcon, Unlock, UserCheck, Users, UserX, X, XCircle, Zap } from 'lucide-react'
+import { Clock, Copy, Edit3, GraduationCap, Handshake, Info, Lock, LogOut, MessageSquare, RefreshCw, Settings, Shield, Shuffle, SkipForward, Trophy as TrophyIcon, Unlock, UserCheck, Users, UserX, X, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats, players } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
@@ -1440,6 +1440,12 @@ export default function GameScreen() {
                                       Co-Admin
                                     </span>
                                   )}
+                                  {players.find(p => p.name === player)?.isCaptain && (
+                                    <span className={`text-xs px-2 py-0.5 rounded-full flex items-center gap-1 ${teamIndex === 0 ? 'bg-blue-500/20 text-blue-400' : teamIndex === 1 ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>
+                                      <GraduationCap className="w-2.5 h-2.5" />
+                                      Captain
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="flex flex-row items-center gap-1 justify-end">
                                   {/* Don't show make describer button if already the describer */}
@@ -1723,7 +1729,12 @@ export default function GameScreen() {
                                 : `bg-${teamColor}-500/10 text-${teamColor}-300`
                                 } ${isHost && player !== playerName ? 'cursor-pointer hover:brightness-125' : ''} ${player === playerName ? 'opacity-60' : ''}`}
                             >
-                              {player}{isDescriber ? ' 📢' : ''}{player === playerName ? ' (you)' : ''}
+                              <div className="flex items-center gap-1">
+                                {player}
+                                {players.find(p => p.name === player)?.isCaptain && <GraduationCap className={`w-3 h-3 ${isDescriber ? 'text-purple-300' : `text-${teamColor}-400`}`} />}
+                                {isDescriber ? ' 📢' : ''}
+                                {player === playerName ? ' (you)' : ''}
+                              </div>
                             </button>
 
                             {/* Host Menu */}
@@ -1791,8 +1802,11 @@ export default function GameScreen() {
                   }`}>
                   {currentTeam?.name || 'Team'}'s Turn
                 </div>
-                <div className="text-lg sm:text-xl md:text-2xl mb-4 sm:mb-6">
+                <div className="text-lg sm:text-xl md:text-2xl mb-4 sm:mb-6 flex items-center justify-center gap-2">
                   Describer: <span className="font-bold text-purple-400">{currentDescriber}</span>
+                  {players.find(p => p.name === currentDescriber)?.isCaptain && (
+                    <GraduationCap className={`w-5 h-5 ${gameState.currentTeamIndex === 0 ? 'text-blue-400' : gameState.currentTeamIndex === 1 ? 'text-red-400' : 'text-green-400'}`} />
+                  )}
                 </div>
                 <div className="text-gray-400 mb-4 sm:mb-6 md:mb-8 text-xs sm:text-sm md:text-base flex items-center justify-center gap-1.5 sm:gap-2">
                   <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -1951,7 +1965,12 @@ export default function GameScreen() {
 
                             return (
                               <div key={guesser} className="glass-strong rounded-lg p-2">
-                                <div className="text-xs font-bold text-blue-300 mb-1.5">{guesser}:</div>
+                                <div className="text-xs font-bold text-blue-300 mb-1.5 flex items-center gap-1">
+                                  {guesser}:
+                                  {players.find(p => p.name === guesser)?.isCaptain && (
+                                    <GraduationCap className={`w-3 h-3 ${players.find(p => p.name === guesser)?.team === 0 ? 'text-blue-400' : players.find(p => p.name === guesser)?.team === 1 ? 'text-red-400' : 'text-green-400'}`} />
+                                  )}
+                                </div>
                                 <div className="flex flex-wrap gap-1.5">
                                   {playerCorrect.map((correct, idx) => (
                                     <span

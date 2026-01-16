@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { Heart, Users, Wifi, WifiOff } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
+import pkg from '../package.json'
 import { useGame } from './GameContext'
 
 // Supporters data - add new supporters here (include currency symbol in amount)
@@ -267,6 +268,12 @@ export default function RoomScreen() {
             Support Us
           </motion.button>
         </motion.div>
+
+        {/* Version & Copyright */}
+        <div className="mt-3 text-center">
+          <p className="text-xs text-gray-400">v5.0.0</p>
+          <p className="text-xs text-gray-400">Taboo @ 2026. All rights reserved.</p>
+        </div>
       </motion.div>
 
       {/* Supporters List - Mobile only (below main content) */}
