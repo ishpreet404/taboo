@@ -1,9 +1,13 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 // Standalone Express + Socket.IO server for local development
 const express = require("express");
 const http = require("http");
 const socketIO = require("socket.io");
 const cors = require("cors");
 const path = require("path");
+const { google } = require("googleapis");
 
 const app = express();
 const server = http.createServer(app);
@@ -27,54 +31,944 @@ app.use(express.static("public"));
 // Game rooms storage
 const gameRooms = new Map();
 
-// Word database for bonus words
-const fs = require("fs");
-const wordList = fs
-	.readFileSync(path.join(__dirname, "wordlist.txt"), "utf8")
-	.split("\n")
-	.filter((w) => w.trim() && !w.startsWith("TABOO") && !w.startsWith("//"))
-	.map((w) => w.trim());
+// Ensure team stats exist and have correct length for a room
+function ensureTeamStats(room) {
+	const teamCount = room.teamCount || 2;
+	if (!room.teamStats) {
+		room.teamStats = {
+			wins: Array(teamCount).fill(0),
+			ties: Array(teamCount).fill(0),
+			losses: Array(teamCount).fill(0),
+			streaks: Array(teamCount).fill(0),
+		};
+		return;
+	}
+	// Resize arrays if teamCount changed
+	['wins', 'ties', 'losses', 'streaks'].forEach((k) => {
+		if (!room.teamStats[k]) room.teamStats[k] = [];
+		while (room.teamStats[k].length < teamCount) room.teamStats[k].push(0);
+		if (room.teamStats[k].length > teamCount) room.teamStats[k] = room.teamStats[k].slice(0, teamCount);
+	});
+}
 
-// Helper function to generate bonus words
-function generateBonusWords(count) {
-	const words = [];
-	const difficulties = ["easy", "medium", "hard"];
-	const usedIndices = new Set();
+// Update room.teamStats based on final gameState scores
+function updateStatsOnGameEnd(room) {
+	try {
+		if (!room || !room.gameState || !room.gameState.teams) return;
+		ensureTeamStats(room);
+		const scores = room.gameState.teams.map(t => (t.score || 0));
+		const maxScore = Math.max(...scores);
+		const winners = [];
+		scores.forEach((s, idx) => { if (s === maxScore) winners.push(idx); });
 
-	for (let i = 0; i < count; i++) {
-		let randomIndex;
-		do {
-			randomIndex = Math.floor(Math.random() * wordList.length);
-		} while (usedIndices.has(randomIndex));
-
-		usedIndices.add(randomIndex);
-		const word = wordList[randomIndex].trim().toUpperCase();
-
-		// Determine difficulty based on word length
-		let difficulty, points;
-		const wordLength = word.length;
-
-		if (wordLength >= 12 || word.includes(" ")) {
-			difficulty = "hard";
-			if (wordLength >= 15) {
-				points = 30 + Math.floor(Math.random() * 11); // 30-40 for very long words
-			} else if (wordLength >= 13) {
-				points = 25 + Math.floor(Math.random() * 6); // 25-30 for long words
-			} else {
-				points = 20 + Math.floor(Math.random() * 6); // 20-25 for hard words
-			}
-		} else if (wordLength >= 8) {
-			difficulty = "medium";
-			points = 12 + Math.floor(Math.random() * 5); // 12-16 points
+		// If tie among multiple teams
+		if (winners.length > 1) {
+			// Increment tie counter for each winning team; increment loss for non-winners
+			scores.forEach((_, idx) => {
+				if (winners.includes(idx)) room.teamStats.ties[idx] = (room.teamStats.ties[idx] || 0) + 1;
+				else room.teamStats.losses[idx] = (room.teamStats.losses[idx] || 0) + 1;
+			});
+			// Reset streaks on tie
+			room.teamStats.streaks = room.teamStats.streaks.map(() => 0);
 		} else {
-			difficulty = "easy";
-			points = 8 + Math.floor(Math.random() * 4); // 8-11 points
+			// Single winner
+			scores.forEach((_, idx) => {
+				if (idx === winners[0]) {
+					room.teamStats.wins[idx] = (room.teamStats.wins[idx] || 0) + 1;
+					// increment winner streak
+					room.teamStats.streaks[idx] = (room.teamStats.streaks[idx] || 0) + 1;
+				} else {
+					room.teamStats.losses[idx] = (room.teamStats.losses[idx] || 0) + 1;
+					// reset losing team's streak
+					room.teamStats.streaks[idx] = 0;
+				}
+			});
 		}
+	} catch (e) {
+		console.error('Failed to update team stats on game end:', e);
+	}
+}
 
-		words.push({ word, difficulty, points });
+// Google Sheets Configuration
+// Set these environment variables or hardcode them (not recommended for production)
+const GOOGLE_SHEETS_CREDENTIALS = process.env.GOOGLE_SHEETS_CREDENTIALS || null;
+const GOOGLE_SHEETS_ID = process.env.GOOGLE_SHEETS_ID || null;
+
+// Initialize Google Sheets API
+let sheetsClient = null;
+if (GOOGLE_SHEETS_CREDENTIALS && GOOGLE_SHEETS_ID) {
+	try {
+		const credentials = JSON.parse(GOOGLE_SHEETS_CREDENTIALS);
+		const auth = new google.auth.GoogleAuth({
+			credentials,
+			scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+		});
+		sheetsClient = google.sheets({ version: "v4", auth });
+		console.log("✅ Google Sheets API initialized successfully");
+	} catch (error) {
+		console.error("❌ Failed to initialize Google Sheets API:", error.message);
+		console.log("Word feedback will be stored locally but not sent to Google Sheets");
+	}
+} else {
+	console.log("⚠️ Google Sheets credentials not configured. Set GOOGLE_SHEETS_CREDENTIALS and GOOGLE_SHEETS_ID environment variables.");
+	console.log("Word feedback will be stored locally but not sent to Google Sheets");
+}
+
+// Function to send word feedback to Google Sheets
+async function sendFeedbackToGoogleSheets(feedbackArray) {
+	if (!sheetsClient || !GOOGLE_SHEETS_ID || feedbackArray.length === 0) {
+		console.log("Skipping Google Sheets upload (not configured or no feedback)");
+		return;
 	}
 
-	return words;
+	try {
+		// Prepare rows for Google Sheets
+		const rows = feedbackArray.map(fb => [
+			fb.timestamp,
+			fb.roomCode,
+			fb.playerName,
+			fb.word,
+			fb.difficulty,
+			fb.feedback,
+		]);
+
+		// Append to Google Sheets
+		await sheetsClient.spreadsheets.values.append({
+			spreadsheetId: GOOGLE_SHEETS_ID,
+			range: "Feedback!A:F", // Sheet name and range
+			valueInputOption: "RAW",
+			insertDataOption: "INSERT_ROWS",
+			resource: {
+				values: rows,
+			},
+		});
+
+		console.log(`✅ Sent ${rows.length} feedback entries to Google Sheets`);
+	} catch (error) {
+		console.error("❌ Error sending feedback to Google Sheets:", error.message);
+	}
+}
+
+// Function to send suggestions to Google Sheets (separate sheet/tab)
+async function sendSuggestionsToGoogleSheets(suggestionsArray) {
+	if (!sheetsClient || !GOOGLE_SHEETS_ID || !suggestionsArray || suggestionsArray.length === 0) {
+		console.log("Skipping Google Sheets suggestions upload (not configured or no suggestions)");
+		return;
+	}
+
+	try {
+		const rows = suggestionsArray.map(s => [
+			s.timestamp,
+			s.roomCode || '',
+			s.playerName || '',
+			s.word || '',
+			s.difficulty || ''
+		]);
+
+		await sheetsClient.spreadsheets.values.append({
+			spreadsheetId: GOOGLE_SHEETS_ID,
+			range: "Suggestions!A:E",
+			valueInputOption: "RAW",
+			insertDataOption: "INSERT_ROWS",
+			resource: { values: rows }
+		});
+
+		console.log(`✅ Sent ${rows.length} suggestion entries to Google Sheets`);
+	} catch (error) {
+		console.error("❌ Error sending suggestions to Google Sheets:", error.message);
+	}
+}
+
+// Helper function to handle room closure and send feedback
+async function handleRoomClosure(room, roomCode, reason = "Room closed") {
+	if (room.wordFeedback && room.wordFeedback.length > 0) {
+		console.log(`📤 Sending ${room.wordFeedback.length} feedback entries from room ${roomCode} (${reason})`);
+		await sendFeedbackToGoogleSheets(room.wordFeedback);
+		room.wordFeedback = []; // Clear feedback after sending
+	}
+	// Send any collected suggestions to Google Sheets as well
+	if (room.suggestedWords && room.suggestedWords.length > 0) {
+		console.log(`📤 Sending ${room.suggestedWords.length} suggestion entries from room ${roomCode} (${reason})`);
+		// Ensure each suggestion row includes roomCode and timestamp
+		const suggestionsToSend = room.suggestedWords.map(s => ({
+			timestamp: s.timestamp || new Date().toISOString(),
+			roomCode: roomCode,
+			playerName: s.playerName || '',
+			word: s.word || '',
+			difficulty: s.difficulty || ''
+		}));
+		await sendSuggestionsToGoogleSheets(suggestionsToSend);
+		room.suggestedWords = [];
+	}
+
+	// Clear any persisted team name overrides so closed rooms don't leak names to new rooms
+	try {
+		if (room && room.teamNames) {
+			delete room.teamNames;
+		}
+	} catch (e) {
+		console.warn(`Failed to clear teamNames for room ${roomCode}:`, e);
+	}
+}
+
+// Helper function to check if a socket is admin (host or co-admin)
+function isAdmin(room, socketId) {
+	if (!room) return false;
+	return room.host === socketId || (room.coAdmins && room.coAdmins.includes(socketId));
+}
+
+// Helper function to get client IP from socket (handles proxies)
+function getClientIP(socket) {
+	// Check various headers for real IP (handles proxies like nginx, cloudflare, etc.)
+	const forwardedFor = socket.handshake.headers['x-forwarded-for'];
+	if (forwardedFor) {
+		// x-forwarded-for can contain multiple IPs, first one is the client
+		return forwardedFor.split(',')[0].trim();
+	}
+
+	const realIP = socket.handshake.headers['x-real-ip'];
+	if (realIP) {
+		return realIP;
+	}
+
+	// Fallback to socket address
+	return socket.handshake.address;
+}
+
+// Word database - load from UNIFIED JSON source
+const fs = require("fs");
+
+// Load unified word database from JSON
+let wordDatabaseJSON;
+try {
+	wordDatabaseJSON = JSON.parse(fs.readFileSync(path.join(__dirname, "wordDatabase.json"), "utf8"));
+} catch (e) {
+	console.error("Failed to load wordDatabase.json, falling back to wordlist.txt");
+	wordDatabaseJSON = null;
+}
+
+// Smart scoring for hard words based on word characteristics
+// Words that are more abstract, longer, or have complex suffixes get higher points
+function getHardWordPoints(word, min, max) {
+	const lowerWord = word.toLowerCase();
+
+	let score = min; // Start at minimum (26)
+
+	// === EASIER HARD WORDS (26-32 points) ===
+	// Common concepts that are relatively easy to describe
+	const easyHardWords = [
+		'openness', 'happiness', 'sadness', 'kindness', 'weakness', 'darkness',
+		'awareness', 'loneliness', 'forgiveness', 'thankfulness', 'friendship',
+		'leadership', 'membership', 'partnership', 'relationship', 'ownership',
+		'childhood', 'neighborhood', 'brotherhood', 'motherhood', 'fatherhood',
+		'freedom', 'boredom', 'wisdom', 'kingdom', 'random',
+		'growth', 'strength', 'health', 'wealth', 'death', 'truth', 'youth',
+		'anger', 'hunger', 'danger', 'stranger', 'murder', 'wonder',
+		'culture', 'nature', 'future', 'picture', 'structure', 'adventure',
+		'pressure', 'pleasure', 'treasure', 'measure', 'leisure',
+		'balance', 'distance', 'instance', 'substance', 'importance',
+		'difference', 'confidence', 'patience', 'violence', 'silence',
+		'experience', 'audience', 'science', 'absence', 'presence',
+		'knowledge', 'marriage', 'courage', 'language', 'damage', 'image',
+		'message', 'passage', 'storage', 'usage', 'package', 'garbage',
+		'privacy', 'accuracy', 'democracy', 'legacy', 'literacy',
+		'anxiety', 'variety', 'society', 'reality', 'quality', 'ability',
+		'activity', 'identity', 'authority', 'community', 'opportunity',
+		'security', 'majority', 'minority', 'priority', 'celebrity',
+		'creativity', 'electricity', 'university', 'personality', 'responsibility',
+		'addiction', 'tradition', 'religion', 'decision', 'vision', 'mission',
+		'fashion', 'passion', 'expression', 'impression', 'depression',
+		'attention', 'intention', 'invention', 'prevention', 'convention',
+		'education', 'situation', 'information', 'communication', 'organization',
+		'celebration', 'imagination', 'generation', 'population', 'reputation',
+		'motivation', 'destination', 'examination', 'explanation', 'expectation',
+		'movement', 'government', 'environment', 'entertainment', 'development',
+		'agreement', 'treatment', 'statement', 'management', 'achievement',
+		'excitement', 'improvement', 'employment', 'equipment', 'experiment',
+		'behavior', 'neighbor', 'favor', 'flavor', 'honor', 'humor', 'color',
+		'failure', 'feature', 'creature', 'temperature', 'furniture', 'signature',
+		'literature', 'architecture', 'agriculture', 'manufacture', 'departure',
+		'survival', 'arrival', 'approval', 'removal', 'proposal', 'disposal',
+		'betrayal', 'denial', 'trial', 'burial', 'material', 'memorial'
+	];
+
+	// Check if word matches any easy hard word pattern
+	for (const easyWord of easyHardWords) {
+		if (lowerWord === easyWord || lowerWord.includes(easyWord)) {
+			return min + Math.floor(Math.random() * 7); // 26-32 points
+		}
+	}
+
+	// === WORD LENGTH SCORING ===
+	// Shorter words (under 10 chars) are often easier to describe
+	if (lowerWord.length <= 8) {
+		score += 0; // Keep at base
+	} else if (lowerWord.length <= 11) {
+		score += 3; // Slightly harder
+	} else if (lowerWord.length <= 14) {
+		score += 6; // Medium-hard
+	} else if (lowerWord.length <= 17) {
+		score += 10; // Hard
+	} else {
+		score += 14; // Very hard (long words)
+	}
+
+	// === ABSTRACT SUFFIX SCORING ===
+	// Very abstract/philosophical suffixes (hardest to describe)
+	const veryHardSuffixes = [
+		'ism', 'ization', 'ification', 'ousness', 'escence', 'itude',
+		'acity', 'icity', 'uality', 'ility', 'osity', 'iety'
+	];
+
+	// Moderately hard suffixes
+	const hardSuffixes = [
+		'tion', 'sion', 'ness', 'ment', 'ance', 'ence', 'ity', 'acy', 'ery'
+	];
+
+	// Check suffixes
+	for (const suffix of veryHardSuffixes) {
+		if (lowerWord.endsWith(suffix)) {
+			score += 8;
+			break;
+		}
+	}
+
+	for (const suffix of hardSuffixes) {
+		if (lowerWord.endsWith(suffix)) {
+			score += 4;
+			break;
+		}
+	}
+
+	// === ABSTRACT PREFIX SCORING ===
+	const abstractPrefixes = [
+		'meta', 'pseudo', 'quasi', 'neo', 'anti', 'counter', 'trans', 'ultra',
+		'hyper', 'super', 'multi', 'poly', 'omni', 'pan', 'proto', 'para'
+	];
+
+	for (const prefix of abstractPrefixes) {
+		if (lowerWord.startsWith(prefix)) {
+			score += 4;
+			break;
+		}
+	}
+
+	// === VERY ABSTRACT CONCEPTS (highest points) ===
+	const veryAbstractWords = [
+		'epistemology', 'ontology', 'phenomenology', 'metaphysics', 'hermeneutics',
+		'dialectic', 'eschatology', 'teleology', 'axiology', 'deontology',
+		'solipsism', 'nihilism', 'existentialism', 'determinism', 'relativism',
+		'empiricism', 'rationalism', 'pragmatism', 'positivism', 'structuralism',
+		'postmodernism', 'deconstruction', 'reductionism', 'materialism', 'idealism',
+		'hegemony', 'paradigm', 'zeitgeist', 'praxis', 'gestalt', 'ethos', 'pathos',
+		'hubris', 'catharsis', 'mimesis', 'anagnorisis', 'peripeteia',
+		'verisimilitude', 'simulacrum', 'simulacra', 'hyperreality',
+		'commodification', 'reification', 'alienation', 'objectification',
+		'interpellation', 'subjectification', 'deterritorialization',
+		'rhizome', 'assemblage', 'immanence', 'transcendence', 'haecceity',
+		'quiddity', 'aseity', 'ipseity', 'alterity', 'aporia', 'differance',
+		'apotheosis', 'sublimation', 'cathexis', 'transference', 'jouissance'
+	];
+
+	for (const abstractWord of veryAbstractWords) {
+		if (lowerWord === abstractWord) {
+			return max - Math.floor(Math.random() * 5); // 46-50 points
+		}
+	}
+
+	// Add small random variance (0-3 points)
+	score += Math.floor(Math.random() * 4);
+
+	// Clamp to valid range
+	return Math.min(max, Math.max(min, score));
+}
+
+// Build word database from unified source
+let wordDatabase = [];
+
+if (wordDatabaseJSON) {
+	// Build from unified JSON - explicit difficulty categories
+	const pointRanges = wordDatabaseJSON.points;
+
+	for (const difficulty of ['easy', 'medium', 'hard']) {
+		const words = wordDatabaseJSON.words[difficulty] || [];
+		const range = pointRanges[difficulty];
+
+		words.forEach(word => {
+			let points;
+			if (difficulty === 'hard') {
+				// Use smart scoring for hard words
+				points = getHardWordPoints(word, range.min, range.max);
+			} else {
+				// Random points for easy and medium
+				points = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+			}
+			wordDatabase.push({
+				word: word.toUpperCase(),
+				difficulty,
+				points
+			});
+		});
+	}
+} else {
+	// Fallback to old wordlist.txt
+	const wordList = fs
+		.readFileSync(path.join(__dirname, "wordlist.txt"), "utf8")
+		.split("\n")
+		.filter((w) => w.trim() && !w.startsWith("TABOO") && !w.startsWith("//"))
+		.map((w) => w.trim());
+
+	wordDatabase = wordList.map((word) => {
+		const upperWord = word.toUpperCase();
+		return { word: upperWord, difficulty: "easy", points: 10 };
+	});
+}
+
+// Log word distribution
+const easyCount = wordDatabase.filter(w => w.difficulty === 'easy').length;
+const mediumCount = wordDatabase.filter(w => w.difficulty === 'medium').length;
+const hardCount = wordDatabase.filter(w => w.difficulty === 'hard').length;
+console.log(`Word database loaded: ${easyCount} easy, ${mediumCount} medium, ${hardCount} hard (total: ${wordDatabase.length})`);
+
+// Build a fast lookup Set for existence checks (normalized lowercase)
+const wordSet = new Set(wordDatabase.map(w => (w.word || '').toString().trim().toLowerCase()));
+
+// Fisher-Yates shuffle algorithm
+function shuffleArray(array) {
+	const shuffled = [...array];
+	for (let i = shuffled.length - 1; i > 0; i--) {
+		const j = Math.floor(Math.random() * (i + 1));
+		[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+	}
+	return shuffled;
+}
+
+// DYNAMIC DISTRIBUTION GENERATOR
+// Creates varied but fair distributions for each round
+// Average target: 35% easy, 40% medium, 25% hard
+function generateRoundDistribution(wordsPerTurn = 10) {
+	// Define distribution patterns (all sum to 10 for a 10-word turn)
+	const patterns = [
+		{ easy: 4, medium: 4, hard: 2 },  // Balanced (standard)
+		{ easy: 5, medium: 3, hard: 2 },  // Easier round
+		{ easy: 3, medium: 5, hard: 2 },  // Medium-heavy
+		{ easy: 3, medium: 4, hard: 3 },  // Harder round
+		{ easy: 4, medium: 3, hard: 3 },  // Hard-leaning
+		{ easy: 5, medium: 4, hard: 1 },  // Very easy round
+		{ easy: 2, medium: 5, hard: 3 },  // Challenge round
+		{ easy: 4, medium: 5, hard: 1 },  // Medium-focused
+		{ easy: 3, medium: 3, hard: 4 },  // Hard round
+		{ easy: 6, medium: 3, hard: 1 },  // Breather round
+	];
+
+	// Select random pattern
+	const pattern = patterns[Math.floor(Math.random() * patterns.length)];
+
+	// Scale if wordsPerTurn is different from 10
+	if (wordsPerTurn !== 10) {
+		const scale = wordsPerTurn / 10;
+		return {
+			easy: Math.round(pattern.easy * scale),
+			medium: Math.round(pattern.medium * scale),
+			hard: Math.max(1, wordsPerTurn - Math.round(pattern.easy * scale) - Math.round(pattern.medium * scale))
+		};
+	}
+
+	return { ...pattern };
+}
+
+// Generate paired distributions for fairness - both teams get same pattern per round
+function generateFairRoundDistributions(roundCount, teamCount, wordsPerTurn = 10) {
+	const distributions = [];
+
+	for (let round = 0; round < roundCount; round++) {
+		// Generate ONE distribution pattern for this round
+		const pattern = generateRoundDistribution(wordsPerTurn);
+		// Both teams will use the same pattern for fairness
+		distributions.push(pattern);
+	}
+
+	return distributions;
+}
+
+// Helper function to select words avoiding already used ones (legacy - uses new ratio)
+// Target: 35% easy, 40% medium, 25% hard (for 10 words: 4 easy, 4 medium, 2 hard)
+function selectWords(count, usedWordIndices, ensureHardWords = false) {
+	// Get indices of words we haven't used yet
+	let availableIndices = wordDatabase
+		.map((_, index) => index)
+		.filter(index => !usedWordIndices.has(index));
+
+	// If we've used more than 80% of words, reset the used words set
+	if (availableIndices.length < wordDatabase.length * 0.2) {
+		usedWordIndices.clear();
+		availableIndices = wordDatabase.map((_, index) => index);
+	}
+
+	let selectedWords = [];
+	const selectedIndices = [];
+
+	// Use the new distribution: 35% easy, 40% medium, 25% hard
+	const hardWordIndices = shuffleArray(availableIndices.filter(index =>
+		wordDatabase[index].difficulty === 'hard'
+	));
+	const mediumWordIndices = shuffleArray(availableIndices.filter(index =>
+		wordDatabase[index].difficulty === 'medium'
+	));
+	const easyWordIndices = shuffleArray(availableIndices.filter(index =>
+		wordDatabase[index].difficulty === 'easy'
+	));
+
+	// Calculate distribution: 4 easy, 4 medium, 2 hard for 10 words
+	const distribution = count === 10
+		? { easy: 4, medium: 4, hard: 2 }
+		: {
+			easy: Math.round(count * 0.35),
+			medium: Math.round(count * 0.40),
+			hard: count - Math.round(count * 0.35) - Math.round(count * 0.40)
+		};
+
+	// Select from each difficulty pool
+	const selectedEasy = easyWordIndices.slice(0, Math.min(distribution.easy, easyWordIndices.length));
+	const selectedMedium = mediumWordIndices.slice(0, Math.min(distribution.medium, mediumWordIndices.length));
+	const selectedHard = hardWordIndices.slice(0, Math.min(distribution.hard, hardWordIndices.length));
+
+	selectedIndices.push(...selectedEasy, ...selectedMedium, ...selectedHard);
+
+	// If we still need more words, fill from remaining available
+	if (selectedIndices.length < count) {
+		const remainingIndices = availableIndices.filter(index =>
+			!selectedIndices.includes(index)
+		);
+		const shuffledRemainingIndices = shuffleArray(remainingIndices);
+		const additionalIndices = shuffledRemainingIndices.slice(0, count - selectedIndices.length);
+		selectedIndices.push(...additionalIndices);
+	}
+
+	// Get word objects and mark as used
+	selectedWords = selectedIndices.map(index => {
+		usedWordIndices.add(index);
+		return wordDatabase[index];
+	});
+
+	// Sort by difficulty for better gameplay (easy to hard)
+	return selectedWords.sort((a, b) => {
+		const difficultyOrder = { easy: 0, medium: 1, hard: 2 };
+		return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
+	});
+}
+
+// WORD DISTRIBUTION SYSTEM
+// Target ratio: 35% easy, 40% medium, 25% hard
+// Ensures both teams receive equivalent difficulty distribution
+
+const DIFFICULTY_RATIO = {
+	easy: 0.35,    // 35%
+	medium: 0.40,  // 40%
+	hard: 0.25     // 25%
+};
+
+// For a 10-word turn: 4 easy, 4 medium, 2 hard (closest to ratio)
+const TURN_DISTRIBUTION = {
+	easy: 4,
+	medium: 4,
+	hard: 2
+};
+
+// Initialize word pools by difficulty (pre-shuffled)
+function initializeWordPools(usedWordIndices) {
+	let availableIndices = wordDatabase
+		.map((_, index) => index)
+		.filter(index => !usedWordIndices.has(index));
+
+	// If we've used more than 80% of words, reset
+	if (availableIndices.length < wordDatabase.length * 0.2) {
+		usedWordIndices.clear();
+		availableIndices = wordDatabase.map((_, index) => index);
+	}
+
+	const pools = {
+		easy: shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'easy')),
+		medium: shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'medium')),
+		hard: shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'hard'))
+	};
+
+	return pools;
+}
+
+// Generate paired word batches for both teams to ensure fairness
+// Each team gets a batch with identical difficulty distribution
+// customDistribution: optional { easy, medium, hard } to override dynamic generation
+function generateTeamWordBatches(room, wordsPerBatch, teamCount, customDistribution = null) {
+	// Initialize or refresh word pools if needed
+	if (!room.wordPools ||
+		!room.wordPools.easy || room.wordPools.easy.length < wordsPerBatch * teamCount ||
+		!room.wordPools.medium || room.wordPools.medium.length < wordsPerBatch * teamCount ||
+		!room.wordPools.hard || room.wordPools.hard.length < wordsPerBatch * teamCount) {
+		room.wordPools = initializeWordPools(room.usedWordIndices);
+	}
+
+	// Use custom distribution or generate dynamic one
+	let distribution;
+	if (customDistribution) {
+		distribution = { ...customDistribution };
+	} else {
+		// Use dynamic round distribution for variety
+		distribution = generateRoundDistribution(wordsPerBatch);
+	}
+
+	// Generate batches for each team with same distribution (fairness)
+	const teamBatches = [];
+	for (let team = 0; team < teamCount; team++) {
+		const batch = [];
+
+		// Pull words for each difficulty level
+		for (const diff of ['easy', 'medium', 'hard']) {
+			const count = distribution[diff];
+			for (let i = 0; i < count; i++) {
+				if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
+					const wordIndex = room.wordPools[diff].shift();
+					room.usedWordIndices.add(wordIndex);
+					batch.push(wordDatabase[wordIndex]);
+				} else {
+					// Fallback: try to get from another difficulty if pool is exhausted
+					const fallbackDiff = diff === 'easy' ? 'medium' : (diff === 'medium' ? 'easy' : 'medium');
+					if (room.wordPools[fallbackDiff] && room.wordPools[fallbackDiff].length > 0) {
+						const wordIndex = room.wordPools[fallbackDiff].shift();
+						room.usedWordIndices.add(wordIndex);
+						batch.push(wordDatabase[wordIndex]);
+					}
+				}
+			}
+		}
+
+		// Shuffle the batch so easy/medium/hard aren't always in same order
+		teamBatches.push(shuffleArray(batch));
+	}
+
+	return teamBatches;
+}
+
+// Generate a fair game pool - creates paired rounds for all teams
+function generateGameWordPool(room, totalRounds, teamCount) {
+	const wordsPerTurn = 10;
+	const bonusWordsPerTurn = 15; // Extra buffer for bonus words per turn
+	const wordsNeededPerTeamPerRound = wordsPerTurn + bonusWordsPerTurn;
+
+	// Initialize tracking for team word distribution
+	room.teamWordBatches = {};
+	room.teamBonusPools = {};
+	room.teamWordStats = {};
+
+	for (let team = 0; team < teamCount; team++) {
+		room.teamWordBatches[team] = [];
+		room.teamBonusPools[team] = [];
+		room.teamWordStats[team] = { easy: 0, medium: 0, hard: 0, total: 0 };
+	}
+
+	// Pre-generate word batches for all rounds
+	for (let round = 0; round < totalRounds; round++) {
+		// Generate main turn words (same distribution for both teams)
+		const turnBatches = generateTeamWordBatches(room, wordsPerTurn, teamCount);
+
+		// Generate bonus word pool (same distribution for both teams)
+		const bonusBatches = generateTeamWordBatches(room, bonusWordsPerTurn, teamCount);
+
+		for (let team = 0; team < teamCount; team++) {
+			room.teamWordBatches[team].push(turnBatches[team]);
+			room.teamBonusPools[team].push(bonusBatches[team]);
+
+			// Track stats
+			[...turnBatches[team], ...bonusBatches[team]].forEach(word => {
+				room.teamWordStats[team][word.difficulty]++;
+				room.teamWordStats[team].total++;
+			});
+		}
+	}
+
+	// Track current round index per team
+	room.teamRoundIndex = {};
+	room.teamBonusIndex = {};
+	for (let team = 0; team < teamCount; team++) {
+		room.teamRoundIndex[team] = 0;
+		room.teamBonusIndex[team] = 0;
+	}
+
+	console.log('Word distribution stats per team:', room.teamWordStats);
+}
+
+// Get words for a team's turn - ensures exact distribution
+function getWordsForTeamTurn(room, teamIndex, count = 10) {
+	const roundIndex = room.teamRoundIndex[teamIndex] || 0;
+
+	// Get the pre-generated batch for this team's turn
+	if (room.teamWordBatches &&
+		room.teamWordBatches[teamIndex] &&
+		room.teamWordBatches[teamIndex][roundIndex]) {
+
+		const words = room.teamWordBatches[teamIndex][roundIndex];
+		room.teamRoundIndex[teamIndex] = roundIndex + 1;
+		room.teamBonusIndex[teamIndex] = 0; // Reset bonus index for new turn
+
+		// Sort by difficulty for gameplay (easy first)
+		return words.slice(0, count).sort((a, b) => {
+			const difficultyOrder = { easy: 0, medium: 1, hard: 2 };
+			return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
+		});
+	}
+
+	// Fallback: generate new batches if pool exhausted
+	const teamCount = room.gameState?.teamCount || 2;
+	generateGameWordPool(room, 5, teamCount);
+	return getWordsForTeamTurn(room, teamIndex, count);
+}
+
+// Get bonus words for a team - maintains same difficulty ratio
+function getBonusWordsForTeam(room, teamIndex, count) {
+	const roundIndex = (room.teamRoundIndex[teamIndex] || 1) - 1; // Current round
+	let bonusIndex = room.teamBonusIndex[teamIndex] || 0;
+
+	if (room.teamBonusPools &&
+		room.teamBonusPools[teamIndex] &&
+		room.teamBonusPools[teamIndex][roundIndex]) {
+
+		const bonusPool = room.teamBonusPools[teamIndex][roundIndex];
+		const words = bonusPool.slice(bonusIndex, bonusIndex + count);
+		room.teamBonusIndex[teamIndex] = bonusIndex + words.length;
+
+		// If we got enough words, return them sorted
+		if (words.length >= count) {
+			return words.sort((a, b) => {
+				const difficultyOrder = { easy: 0, medium: 1, hard: 2 };
+				return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
+			});
+		}
+
+		// If not enough in current round's pool, get from next round's pool
+		const needed = count - words.length;
+		const nextRound = roundIndex + 1;
+		if (room.teamBonusPools[teamIndex][nextRound]) {
+			const moreWords = room.teamBonusPools[teamIndex][nextRound].slice(0, needed);
+			words.push(...moreWords);
+		}
+
+		return words.sort((a, b) => {
+			const difficultyOrder = { easy: 0, medium: 1, hard: 2 };
+			return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
+		});
+	}
+
+	// Fallback: generate fresh words with proper distribution
+	return generateBonusWordsWithRatio(room, count);
+}
+
+// Generate bonus words maintaining the difficulty ratio
+function generateBonusWordsWithRatio(room, count) {
+	const words = [];
+
+	// Calculate distribution for bonus words
+	const distribution = {
+		easy: Math.round(count * DIFFICULTY_RATIO.easy),
+		medium: Math.round(count * DIFFICULTY_RATIO.medium),
+		hard: count - Math.round(count * DIFFICULTY_RATIO.easy) - Math.round(count * DIFFICULTY_RATIO.medium)
+	};
+
+	// Ensure minimum 1 of each if count >= 3
+	if (count >= 3) {
+		distribution.easy = Math.max(1, distribution.easy);
+		distribution.medium = Math.max(1, distribution.medium);
+		distribution.hard = Math.max(1, distribution.hard);
+
+		// Rebalance if over count
+		while (distribution.easy + distribution.medium + distribution.hard > count) {
+			if (distribution.medium > 1) distribution.medium--;
+			else if (distribution.easy > 1) distribution.easy--;
+			else distribution.hard--;
+		}
+	}
+
+	// Initialize pools if needed
+	if (!room.wordPools) {
+		room.wordPools = initializeWordPools(room.usedWordIndices);
+	}
+
+	// Pull words from pools
+	for (const diff of ['easy', 'medium', 'hard']) {
+		for (let i = 0; i < distribution[diff]; i++) {
+			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
+				const wordIndex = room.wordPools[diff].shift();
+				room.usedWordIndices.add(wordIndex);
+				words.push(wordDatabase[wordIndex]);
+			}
+		}
+	}
+
+	return shuffleArray(words);
+}
+
+// Get progressive bonus words with specific difficulty targeting
+// difficultyType: 'easy', 'medium', 'hard-mixed'
+function getProgressiveBonusWords(room, count, difficultyType) {
+	const words = [];
+
+	// Initialize pools if needed
+	if (!room.wordPools) {
+		room.wordPools = initializeWordPools(room.usedWordIndices);
+	}
+
+	// Log pool sizes before selection
+	console.log(`[BONUS] Getting ${count} ${difficultyType} words. Pool sizes: easy=${room.wordPools.easy?.length || 0}, medium=${room.wordPools.medium?.length || 0}, hard=${room.wordPools.hard?.length || 0}`);
+
+	// Refresh pools if running low on the requested difficulty
+	let needsRefresh = false;
+	if (difficultyType === 'easy' && (!room.wordPools.easy || room.wordPools.easy.length < count)) {
+		needsRefresh = true;
+	} else if (difficultyType === 'medium' && (!room.wordPools.medium || room.wordPools.medium.length < count)) {
+		needsRefresh = true;
+	} else if (difficultyType === 'hard-mixed') {
+		const hardNeeded = Math.ceil(count * 0.4);
+		const mediumNeeded = count - hardNeeded;
+		if ((!room.wordPools.medium || room.wordPools.medium.length < mediumNeeded) ||
+			(!room.wordPools.hard || room.wordPools.hard.length < hardNeeded)) {
+			needsRefresh = true;
+		}
+	}
+
+	if (needsRefresh) {
+		console.log(`[BONUS] Refreshing word pools...`);
+		room.wordPools = initializeWordPools(room.usedWordIndices);
+		console.log(`[BONUS] After refresh: easy=${room.wordPools.easy?.length || 0}, medium=${room.wordPools.medium?.length || 0}, hard=${room.wordPools.hard?.length || 0}`);
+	}
+
+	let distribution;
+
+	switch (difficultyType) {
+		case 'easy':
+			// All easy words
+			distribution = { easy: count, medium: 0, hard: 0 };
+			break;
+		case 'medium':
+			// All medium words
+			distribution = { easy: 0, medium: count, hard: 0 };
+			break;
+		case 'hard-mixed':
+			// Mix of medium and hard (60% medium, 40% hard)
+			const hardCount = Math.ceil(count * 0.4);
+			const mediumCount = count - hardCount;
+			distribution = { easy: 0, medium: mediumCount, hard: hardCount };
+			break;
+		default:
+			// Default mixed distribution
+			distribution = {
+				easy: Math.round(count * 0.35),
+				medium: Math.round(count * 0.40),
+				hard: count - Math.round(count * 0.35) - Math.round(count * 0.40)
+			};
+	}
+
+	console.log(`[BONUS] Distribution for ${difficultyType}:`, distribution);
+
+	// Pull words from pools based on distribution
+	for (const diff of ['easy', 'medium', 'hard']) {
+		for (let i = 0; i < distribution[diff]; i++) {
+			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
+				const wordIndex = room.wordPools[diff].shift();
+				room.usedWordIndices.add(wordIndex);
+				words.push(wordDatabase[wordIndex]);
+			} else {
+				// Fallback: try to get from adjacent difficulty
+				const fallbackDiff = diff === 'easy' ? 'medium' : (diff === 'hard' ? 'medium' : 'easy');
+				if (room.wordPools[fallbackDiff] && room.wordPools[fallbackDiff].length > 0) {
+					const wordIndex = room.wordPools[fallbackDiff].shift();
+					room.usedWordIndices.add(wordIndex);
+					words.push(wordDatabase[wordIndex]);
+					console.log(`[BONUS] Fallback: wanted ${diff}, got ${wordDatabase[wordIndex].difficulty}`);
+				}
+			}
+		}
+	}
+
+	// Log the result
+	const resultCounts = { easy: 0, medium: 0, hard: 0 };
+	words.forEach(w => resultCounts[w.difficulty]++);
+	console.log(`[BONUS] Selected ${words.length} words:`, resultCounts);
+
+	// Sort by difficulty (easy first for better UX)
+	return words.sort((a, b) => {
+		const difficultyOrder = { easy: 0, medium: 1, hard: 2 };
+		return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
+	});
+}
+
+// Get dynamic bonus words with specific distribution pattern
+// pattern: { easy: number, medium: number, hard: number, count: number }
+function getDynamicBonusWords(room, pattern) {
+	const words = [];
+	const distribution = { easy: pattern.easy, medium: pattern.medium, hard: pattern.hard };
+	const totalNeeded = pattern.count;
+
+	// Initialize pools if needed
+	if (!room.wordPools) {
+		room.wordPools = initializeWordPools(room.usedWordIndices);
+	}
+
+	console.log(`[DYNAMIC BONUS] Pattern: e${pattern.easy} m${pattern.medium} h${pattern.hard}`);
+	console.log(`[DYNAMIC BONUS] Pool sizes: easy=${room.wordPools.easy?.length || 0}, medium=${room.wordPools.medium?.length || 0}, hard=${room.wordPools.hard?.length || 0}`);
+
+	// Check if we need to refresh pools
+	const needsRefresh =
+		(distribution.easy > 0 && (!room.wordPools.easy || room.wordPools.easy.length < distribution.easy)) ||
+		(distribution.medium > 0 && (!room.wordPools.medium || room.wordPools.medium.length < distribution.medium)) ||
+		(distribution.hard > 0 && (!room.wordPools.hard || room.wordPools.hard.length < distribution.hard));
+
+	if (needsRefresh) {
+		console.log(`[DYNAMIC BONUS] Refreshing word pools...`);
+		room.wordPools = initializeWordPools(room.usedWordIndices);
+	}
+
+	// Pull words from pools based on distribution
+	for (const diff of ['easy', 'medium', 'hard']) {
+		for (let i = 0; i < distribution[diff]; i++) {
+			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
+				const wordIndex = room.wordPools[diff].shift();
+				room.usedWordIndices.add(wordIndex);
+				words.push(wordDatabase[wordIndex]);
+			} else {
+				// Fallback: try adjacent difficulty
+				const fallbacks = diff === 'easy' ? ['medium', 'hard'] :
+					diff === 'hard' ? ['medium', 'easy'] :
+						['easy', 'hard'];
+				for (const fb of fallbacks) {
+					if (room.wordPools[fb] && room.wordPools[fb].length > 0) {
+						const wordIndex = room.wordPools[fb].shift();
+						room.usedWordIndices.add(wordIndex);
+						words.push(wordDatabase[wordIndex]);
+						console.log(`[DYNAMIC BONUS] Fallback: wanted ${diff}, got ${fb}`);
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	// Log the result
+	const resultCounts = { easy: 0, medium: 0, hard: 0 };
+	words.forEach(w => resultCounts[w.difficulty]++);
+	console.log(`[DYNAMIC BONUS] Selected ${words.length} words:`, resultCounts);
+
+	// Shuffle the words so they're not in difficulty order (more fun!)
+	return shuffleArray(words);
+}
+
+// Legacy wrapper for backward compatibility
+function getWordsFromPool(room, count, ensureMixedDifficulty = false) {
+	const teamIndex = room.gameState?.currentTeamIndex || 0;
+
+	if (ensureMixedDifficulty) {
+		return getWordsForTeamTurn(room, teamIndex, count);
+	} else {
+		return getBonusWordsForTeam(room, teamIndex, count);
+	}
 }
 
 // Helper function to generate room code
@@ -96,11 +990,28 @@ io.on("connection", (socket) => {
 					id: socket.id,
 					name: data.playerName,
 					team: null,
+					sessionId: data.sessionId || null, // Store session ID for reconnection
 				},
 			],
 			gameState: null,
 			started: false,
 			teamSwitchingLocked: false,
+			usedWordIndices: new Set(), // Track used words to prevent repetition
+			teamCount: 2, // Default to 2 teams
+			disconnectedPlayers: new Map(), // Track disconnected players for grace period
+			tabooReporting: false, // Taboo reporting off by default
+			tabooVoting: false, // Taboo voting off by default
+			roundHistory: [], // Store round history for reconnecting players
+			bannedPlayers: new Set(), // Track banned player names (for display)
+			bannedIPs: new Set(), // Track banned IPs to prevent rejoining
+			wordFeedback: [], // Store word feedback from players
+			suggestedWords: [], // Store user-suggested words
+			gamesPlayed: 0, // Number of times this room has started a new game via Play Again
+			teamStats: {
+				wins: [0, 0],
+				ties: [0, 0],
+				losses: [0, 0]
+			},
 		};
 
 		gameRooms.set(roomCode, room);
@@ -109,9 +1020,107 @@ io.on("connection", (socket) => {
 		console.log(`Room created: ${roomCode}`);
 	});
 
+	// Reconnect to existing session
+	socket.on("reconnect-session", (data) => {
+		const { roomCode, playerName, sessionId } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (!room) {
+			socket.emit("reconnect-failed", { message: "Room no longer exists" });
+			return;
+		}
+
+		// Get client IP for ban checking
+		const clientIP = getClientIP(socket);
+
+		// Check if player's IP is banned
+		if (room.bannedIPs && room.bannedIPs.has(clientIP)) {
+			socket.emit("reconnect-failed", { message: "You have been banned from this room" });
+			return;
+		}
+
+		// Also check name-based ban as fallback
+		if (room.bannedPlayers && room.bannedPlayers.has(playerName)) {
+			socket.emit("reconnect-failed", { message: "You have been banned from this room" });
+			return;
+		}
+
+		// Find player by sessionId or name
+		const existingPlayer = room.players.find(
+			(p) => (p.sessionId && p.sessionId === sessionId) || p.name === playerName
+		);
+
+		// Also check disconnected players waiting for reconnection
+		const disconnectedInfo = room.disconnectedPlayers?.get(playerName);
+
+		if (existingPlayer) {
+			// Clear any pending disconnect timer
+			if (disconnectedInfo?.timer) {
+				clearTimeout(disconnectedInfo.timer);
+				room.disconnectedPlayers.delete(playerName);
+			}
+
+			// Update socket ID
+			const oldSocketId = existingPlayer.id;
+			existingPlayer.id = socket.id;
+			existingPlayer.sessionId = sessionId;
+
+			// Update host if this was the host
+			const wasHost = room.host === oldSocketId;
+			if (wasHost) {
+				room.host = socket.id;
+			}
+
+			// Update co-admin if this was a co-admin
+			if (room.coAdmins && room.coAdmins.includes(oldSocketId)) {
+				room.coAdmins = room.coAdmins.filter((id) => id !== oldSocketId);
+				room.coAdmins.push(socket.id);
+			}
+
+			socket.join(roomCode);
+
+			// Check if player is co-admin
+			const isCoAdmin = room.coAdmins && room.coAdmins.includes(socket.id);
+
+			// Calculate real-time remaining if there's an active turn
+			let gameStateWithTime = room.gameState;
+			if (room.gameState && room.gameState.turnActive && room.gameState.turnStartTime) {
+				const elapsedSeconds = Math.floor((Date.now() - room.gameState.turnStartTime) / 1000);
+				const turnTime = room.gameState.turnTime || 60;
+				const actualTimeRemaining = Math.max(0, turnTime - elapsedSeconds);
+				// Create a copy with updated time
+				gameStateWithTime = {
+					...room.gameState,
+					timeRemaining: actualTimeRemaining
+				};
+			}
+
+			socket.emit("reconnect-success", {
+				roomCode,
+				room,
+				gameState: gameStateWithTime,
+				isHost: room.host === socket.id,
+				isCoAdmin,
+				playerName: existingPlayer.name,
+				roundHistory: room.roundHistory || [],
+				tabooReporting: room.tabooReporting || false,
+				tabooVoting: room.tabooVoting || false,
+			});
+
+			io.to(roomCode).emit("player-reconnected", {
+				playerName: existingPlayer.name,
+				room,
+			});
+
+			console.log(`Player ${playerName} reconnected to room ${roomCode}`);
+		} else {
+			socket.emit("reconnect-failed", { message: "Session not found in room" });
+		}
+	});
+
 	// Join existing room
 	socket.on("join-room", (data) => {
-		const { roomCode, playerName } = data;
+		const { roomCode, playerName, sessionId } = data;
 		const room = gameRooms.get(roomCode);
 
 		if (!room) {
@@ -119,29 +1128,68 @@ io.on("connection", (socket) => {
 			return;
 		}
 
+		// Get client IP for ban checking
+		const clientIP = getClientIP(socket);
+
+		// Check if player's IP is banned
+		if (room.bannedIPs && room.bannedIPs.has(clientIP)) {
+			socket.emit("error", { message: "You have been banned from this room and cannot rejoin" });
+			return;
+		}
+
+		// Also check name-based ban as fallback (in case IP changed)
+		if (room.bannedPlayers && room.bannedPlayers.has(playerName)) {
+			socket.emit("error", { message: "You have been banned from this room" });
+			return;
+		}
+
 		// Check if player already exists (reconnection)
 		const existingPlayer = room.players.find((p) => p.name === playerName);
 
 		if (existingPlayer) {
-			// Reconnection - update socket ID
+			// Reconnection - update socket ID and session ID
 			existingPlayer.id = socket.id;
+			existingPlayer.sessionId = sessionId;
 			socket.join(roomCode);
 
 			if (room.started) {
+				// Calculate real-time remaining if there's an active turn
+				let gameStateWithTime = room.gameState;
+				if (room.gameState && room.gameState.turnActive && room.gameState.turnStartTime) {
+					const elapsedSeconds = Math.floor((Date.now() - room.gameState.turnStartTime) / 1000);
+					const turnTime = room.gameState.turnTime || 60;
+					const actualTimeRemaining = Math.max(0, turnTime - elapsedSeconds);
+					// Create a copy with updated time
+					gameStateWithTime = {
+						...room.gameState,
+						timeRemaining: actualTimeRemaining
+					};
+				}
+
 				socket.emit("room-rejoined", {
 					roomCode,
 					room,
-					gameState: room.gameState,
+					gameState: gameStateWithTime,
+					roundHistory: room.roundHistory || [],
+					tabooReporting: room.tabooReporting || false,
+					tabooVoting: room.tabooVoting || false,
 				});
 				io.to(roomCode).emit("player-reconnected", {
 					playerName,
 					room,
 				});
 			} else {
-				socket.emit("room-joined", { roomCode, room });
+				socket.emit("room-joined", {
+					roomCode,
+					room,
+					teamCount: room.teamCount || 2,
+					tabooReporting: room.tabooReporting || false,
+					tabooVoting: room.tabooVoting || false
+				});
 				io.to(roomCode).emit("player-joined", {
 					player: existingPlayer,
 					room,
+					teamCount: room.teamCount || 2,
 				});
 			}
 			console.log(`Player ${playerName} reconnected to room: ${roomCode}`);
@@ -153,6 +1201,7 @@ io.on("connection", (socket) => {
 			id: socket.id,
 			name: playerName,
 			team: null,
+			sessionId: sessionId || null, // Store session ID for reconnection
 		};
 
 		room.players.push(newPlayer);
@@ -164,6 +1213,7 @@ io.on("connection", (socket) => {
 				roomCode,
 				room,
 				gameState: room.gameState,
+				teamCount: room.gameState?.teamCount || 2,
 			});
 			io.to(roomCode).emit("player-joined-midgame", {
 				player: newPlayer,
@@ -172,11 +1222,46 @@ io.on("connection", (socket) => {
 			console.log(`Player ${playerName} joined mid-game in room: ${roomCode}`);
 		} else {
 			// Normal join before game starts
-			socket.emit("room-joined", { roomCode, room });
+			socket.emit("room-joined", {
+				roomCode,
+				room,
+				teamCount: room.teamCount || 2,
+				tabooReporting: room.tabooReporting || false,
+				tabooVoting: room.tabooVoting || false
+			});
 			io.to(roomCode).emit("player-joined", {
 				player: newPlayer,
 				room,
+				teamCount: room.teamCount || 2,
 			});
+
+			// If draft is in progress, send draft state to new player and update available players
+			if (room.draftState) {
+				const ds = room.draftState
+				// Add new player to available players and update initial count
+				if (ds.availablePlayers) {
+					ds.availablePlayers.push({ id: newPlayer.id, name: newPlayer.name })
+					// Update initialAvailableCount to reflect new player count for even/odd logic
+					ds.initialAvailableCount = (ds.initialAvailableCount || 0) + 1
+				}
+
+				// Send current draft state to the new player so they see the overlay
+				socket.emit('captain-pick-turn', {
+					teams: ds.teams,
+					availablePlayers: ds.availablePlayers,
+					currentCaptainId: ds.captains[ds.currentCaptainIndex],
+					currentCaptainName: room.players.find(p => p.id === ds.captains[ds.currentCaptainIndex])?.name,
+					coinResult: ds.currentCaptainIndex,
+					captains: ds.captains
+				})
+
+				// Notify other clients about the new available player (without disrupting their state)
+				socket.to(roomCode).emit('draft-player-added', {
+					player: { id: newPlayer.id, name: newPlayer.name },
+					availablePlayers: ds.availablePlayers
+				})
+			}
+
 			console.log(`Player ${playerName} joined room: ${roomCode}`);
 		}
 	});
@@ -253,6 +1338,108 @@ io.on("connection", (socket) => {
 		}
 	});
 
+	// Set team count (host only)
+	socket.on("set-team-count", (data) => {
+		const { roomCode, teamCount } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id) {
+			// Store team count in room
+			room.teamCount = teamCount;
+			// Broadcast the team count to all players in the room
+			io.to(roomCode).emit("team-count-changed", { teamCount });
+			console.log(`Team count set to ${teamCount} in room ${roomCode}`);
+		}
+	});
+
+	// Set taboo settings (host or admin)
+	socket.on("set-taboo-settings", (data) => {
+		const { roomCode, tabooReporting, tabooVoting } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room) {
+			// Check if sender is host or co-admin using the helper
+			if (isAdmin(room, socket.id)) {
+				room.tabooReporting = tabooReporting;
+				room.tabooVoting = tabooVoting;
+				// Also update gameState if it exists
+				if (room.gameState) {
+					room.gameState.tabooReporting = tabooReporting;
+					room.gameState.tabooVoting = tabooVoting;
+				}
+				// Broadcast settings to all players
+				io.to(roomCode).emit("taboo-settings-changed", { tabooReporting, tabooVoting });
+				console.log(`Taboo settings updated in room ${roomCode}: reporting=${tabooReporting}, voting=${tabooVoting}`);
+			} else {
+				console.log(`Unauthorized taboo settings change attempt in room ${roomCode} by socket ${socket.id}`);
+			}
+		}
+	});
+
+	// Quick existence check for suggested words (fast O(1) lookup using in-memory Set)
+	socket.on('check-word-exists', (data) => {
+		const { roomCode, word } = data || {};
+		if (!word) {
+			socket.emit('check-word-result', { word: '', exists: false });
+			return;
+		}
+		const normalized = word.toString().trim().toLowerCase();
+		const exists = wordSet.has(normalized);
+		// Reply only to the requesting socket
+		socket.emit('check-word-result', { word, exists });
+	});
+
+	// Receive suggested words from clients
+	socket.on('suggest-word', (data) => {
+		const { roomCode, playerName, word, difficulty, timestamp } = data || {};
+		const room = gameRooms.get(roomCode);
+		if (!room) return;
+
+		// Ensure suggestedWords array exists
+		if (!room.suggestedWords) room.suggestedWords = [];
+
+		const normalizedUpper = (word || '').toString().trim().toUpperCase();
+		const normalizedLower = normalizedUpper.toLowerCase();
+		const exists = wordSet.has(normalizedLower);
+		const alreadySuggested = room.suggestedWords.some(s => s.word === normalizedUpper);
+
+		if (!alreadySuggested) {
+			// Store suggestion with metadata (include suggested difficulty)
+			room.suggestedWords.push({ playerName, word: normalizedUpper, difficulty: difficulty || 'medium', timestamp: timestamp || new Date().toISOString(), exists });
+			console.log(`Suggestion in room ${roomCode}: "${normalizedUpper}" by ${playerName} (exists=${exists})`);
+		} else {
+			console.log(`Duplicate suggestion suppressed in room ${roomCode}: "${normalizedUpper}" by ${playerName}`);
+		}
+
+		// Reply to client with result and explicit success flag
+		socket.emit('suggest-word-result', { success: true, word: normalizedUpper, exists, alreadySuggested, difficulty: difficulty || 'medium' });
+	});
+
+	// Submit word feedback
+	socket.on("submit-word-feedback", (data) => {
+		const { roomCode, playerName, word, difficulty, feedback, timestamp } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room) {
+			// Initialize wordFeedback array if it doesn't exist
+			if (!room.wordFeedback) {
+				room.wordFeedback = [];
+			}
+
+			// Store the feedback
+			room.wordFeedback.push({
+				roomCode,
+				playerName,
+				word,
+				difficulty,
+				feedback,
+				timestamp,
+			});
+
+			console.log(`Word feedback submitted in room ${roomCode}: "${word}" by ${playerName} - "${feedback}"`);
+		}
+	});
+
 	// Start game
 	socket.on("start-game", (data) => {
 		const { roomCode, gameState } = data;
@@ -261,28 +1448,65 @@ io.on("connection", (socket) => {
 		if (room && room.host === socket.id) {
 			room.started = true;
 
+			// Ensure we have the right number of teams based on teamCount
+			const teamCount = gameState.teamCount || 2;
+			const teams = [];
+
+			// Create teams based on teamCount
+			for (let i = 0; i < teamCount; i++) {
+				teams.push({
+					name: gameState.teams[i]?.name || `Team ${i + 1}`,
+					players: gameState.teams[i]?.players || [],
+					score: 0
+				});
+			}
+
 			// Reset game state completely for new game
 			room.gameState = {
 				...gameState,
+				teamCount: teamCount, // Store team count
 				gameStarted: true, // Add this flag for disconnect handler to check
 				turnCount: {}, // Reset turn counter
 				round: 1,
 				currentTeamIndex: 0,
-				currentDescriberIndex: [0, 0],
-				teams: gameState.teams.map((team) => ({
-					...team,
-					score: 0,
-				})),
+				currentDescriberIndex: Array(teamCount).fill(0),
+				teams: teams,
 				guessedWords: [],
 				skippedWords: [],
 				currentWords: [],
 				currentTurnGuessedWords: [],
 				currentTurnWrongGuesses: [],
 				playerContributions: {}, // { playerName: { points: 0, guessedWords: [], describedWords: [] } }
+				tabooReporting: room.tabooReporting || false, // Default disabled
+				tabooVoting: room.tabooVoting || false, // Default disabled
+				confirmedTaboosByTeam: {}, // Track taboo point deductions per team: { teamIndex: totalPoints }
 			};
 
-			io.to(roomCode).emit("game-started", { gameState: room.gameState });
-			console.log(`Game started in room: ${roomCode}`);
+			// If room.teamNames exists (persisted from lobby edits), apply them to the new game state teams
+			if (room.teamNames && Array.isArray(room.teamNames) && Array.isArray(room.gameState.teams)) {
+				for (let i = 0; i < room.gameState.teams.length; i++) {
+					if (room.teamNames[i]) {
+						room.gameState.teams[i].name = room.teamNames[i]
+					}
+				}
+			}
+
+			// Reset used words for the new game
+			room.usedWordIndices = new Set();
+			room.wordPools = null; // Reset word pools
+
+			// Pre-generate fair word pools for all teams
+			// This ensures both teams get identical difficulty distribution
+			const estimatedTurnsPerTeam = gameState.maxRounds || 5;
+			generateGameWordPool(room, estimatedTurnsPerTeam, teamCount);
+
+			console.log(`Game word pools generated: ${estimatedTurnsPerTeam} rounds for ${teamCount} teams`);
+			console.log(`Target distribution: 35% easy, 40% medium, 25% hard`);
+
+			// Ensure stats array sizes match team count before starting
+			ensureTeamStats(room);
+			io.to(roomCode).emit("game-started", { gameState: room.gameState, room: { players: room.players, host: room.host, coAdmins: room.coAdmins, teamStats: room.teamStats, gamesPlayed: room.gamesPlayed, teamNames: room.teamNames } });
+			console.log(`Game started in room: ${roomCode} with ${teamCount} teams`);
 		}
 	});
 
@@ -297,9 +1521,9 @@ io.on("connection", (socket) => {
 		}
 	});
 
-	// Start turn
+	// Start turn - generate words on server
 	socket.on("start-turn", (data) => {
-		const { roomCode, words } = data;
+		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
 
 		if (room && room.gameState) {
@@ -313,12 +1537,20 @@ io.on("connection", (socket) => {
 				gs.turnCount[gs.currentTeamIndex] = 0;
 			}
 
+			// Get words from the pre-generated pool to ensure fairness
+			const words = getWordsFromPool(room, 10, true);
+
 			// Clear guessed words for new turn and store current words
 			gs.currentTurnGuessedWords = [];
 			gs.currentTurnWrongGuesses = [];
 			gs.guessedByPlayer = []; // Initialize tracking for who guessed what
 			gs.currentWords = words; // Store words in game state for mid-game joins
 			gs.timeRemaining = gs.turnTime || 60; // Store initial time
+			gs.turnStartTime = Date.now(); // Record server timestamp when turn starts
+			gs.turnActive = true; // Mark turn as active
+			gs.tabooVotes = {}; // Clear taboo votes for new turn
+			gs.confirmedTaboos = []; // Clear confirmed taboos for new turn
+			gs.confirmedTabooDetails = []; // Clear taboo details for new turn
 
 			// Broadcast turn started with words to all players
 			io.to(roomCode).emit("turn-started", {
@@ -335,6 +1567,44 @@ io.on("connection", (socket) => {
 
 		if (room && room.gameState) {
 			const gs = room.gameState;
+
+			// Validate guess timing with grace period
+			// Allow guesses during grace period even if turnActive is false (for last-second guesses)
+			const GRACE_PERIOD_MS = 2000; // 2 second grace period for network latency
+			const turnDuration = (gs.turnTime || 60) * 1000; // Convert to milliseconds
+
+			// If turnStartTime is null and we're not in grace period, turn is fully over
+			if (!gs.turnStartTime && !gs.inGracePeriod) {
+				console.log(`Late guess rejected from ${guesser}: "${word}" - turn already fully ended`);
+				io.to(socket.id).emit("guess-rejected", {
+					message: "Time's up! Your guess arrived too late.",
+					word: word
+				});
+				return;
+			}
+
+			const elapsedTime = Date.now() - (gs.turnStartTime || Date.now());
+			const maxAllowedTime = turnDuration + GRACE_PERIOD_MS;
+
+			// Check if we're within the grace period (allows last-second guesses)
+			// Also accept if server is explicitly in grace period (inGracePeriod flag)
+			const isWithinGracePeriod = gs.inGracePeriod || elapsedTime <= maxAllowedTime;
+
+			// Reject guess only if we're past the grace period
+			if (!isWithinGracePeriod) {
+				console.log(`Late guess rejected from ${guesser}: "${word}" arrived ${Math.floor(elapsedTime / 1000)}s after turn start (max allowed: ${Math.floor(maxAllowedTime / 1000)}s)`);
+				// Notify the specific player that their guess was too late
+				io.to(socket.id).emit("guess-rejected", {
+					message: "Time's up! Your guess arrived too late.",
+					word: word
+				});
+				return; // Don't process late guesses
+			}
+
+			// Log grace period guess for debugging
+			if (!gs.turnActive && isWithinGracePeriod) {
+				console.log(`Grace period guess accepted from ${guesser}: "${word}" at ${Math.floor(elapsedTime / 1000)}s (grace period active)`);
+			}
 
 			// Initialize guessed words tracking if not exists
 			if (!gs.currentTurnGuessedWords) {
@@ -398,14 +1668,67 @@ io.on("connection", (socket) => {
 				}
 
 				// Check for bonus milestones (6, 10, 14, 18, 22...)
+				// Dynamic bonus system with progressive difficulty
+				// 1st bonus: Easy focused (warm up)
+				// 2nd+ bonus: Dynamic mix that gets progressively challenging
 				const milestones = [6, 10, 14, 18, 22, 26, 30];
 				const currentCount = gs.currentTurnGuessedWords.length;
 
 				if (milestones.includes(currentCount)) {
-					// Generate bonus words on server
-					const bonusCount =
-						3 + Math.floor(milestones.indexOf(currentCount) / 2);
-					const bonusWords = generateBonusWords(bonusCount);
+					const milestoneIndex = milestones.indexOf(currentCount);
+
+					// Dynamic bonus distribution patterns
+					// Each pattern: { easy, medium, hard, count }
+					const BONUS_PATTERNS = {
+						// First bonus: Always easy-focused (3 words)
+						first: [
+							{ easy: 3, medium: 0, hard: 0, count: 3 },  // All easy
+						],
+						// Second bonus: Medium-focused with variety (5 words)
+						second: [
+							{ easy: 1, medium: 4, hard: 0, count: 5 },  // Medium heavy
+							{ easy: 2, medium: 3, hard: 0, count: 5 },  // Balanced easy-medium
+							{ easy: 0, medium: 5, hard: 0, count: 5 },  // All medium
+							{ easy: 1, medium: 3, hard: 1, count: 5 },  // Light challenge
+						],
+						// Third bonus: Challenge mix (5 words)
+						third: [
+							{ easy: 0, medium: 3, hard: 2, count: 5 },  // Medium-hard mix
+							{ easy: 1, medium: 2, hard: 2, count: 5 },  // Balanced challenge
+							{ easy: 0, medium: 2, hard: 3, count: 5 },  // Hard heavy
+							{ easy: 1, medium: 3, hard: 1, count: 5 },  // Medium focused
+						],
+						// Fourth+ bonus: Dynamic challenge (5 words)
+						later: [
+							{ easy: 0, medium: 2, hard: 3, count: 5 },  // Hard heavy
+							{ easy: 1, medium: 2, hard: 2, count: 5 },  // Balanced hard
+							{ easy: 0, medium: 3, hard: 2, count: 5 },  // Medium-hard
+							{ easy: 0, medium: 1, hard: 4, count: 5 },  // Very hard
+							{ easy: 1, medium: 1, hard: 3, count: 5 },  // Hard challenge
+							{ easy: 0, medium: 4, hard: 1, count: 5 },  // Medium breather
+						]
+					};
+
+					// Select appropriate pattern pool based on milestone
+					let patternPool;
+					if (milestoneIndex === 0) {
+						patternPool = BONUS_PATTERNS.first;
+					} else if (milestoneIndex === 1) {
+						patternPool = BONUS_PATTERNS.second;
+					} else if (milestoneIndex === 2) {
+						patternPool = BONUS_PATTERNS.third;
+					} else {
+						patternPool = BONUS_PATTERNS.later;
+					}
+
+					// Randomly select a pattern from the pool
+					const selectedPattern = patternPool[Math.floor(Math.random() * patternPool.length)];
+					const bonusCount = selectedPattern.count;
+
+					console.log(`[BONUS] Milestone ${milestoneIndex + 1}: Selected pattern`, selectedPattern);
+
+					// Get bonus words with the dynamic distribution
+					const bonusWords = getDynamicBonusWords(room, selectedPattern);
 
 					// Add to current words
 					if (!gs.currentWords) {
@@ -417,6 +1740,8 @@ io.on("connection", (socket) => {
 					io.to(roomCode).emit("bonus-words-sync", {
 						words: bonusWords,
 						count: bonusCount,
+						difficulty: `e${selectedPattern.easy}m${selectedPattern.medium}h${selectedPattern.hard}`,
+						pattern: selectedPattern
 					});
 				}
 			}
@@ -464,6 +1789,92 @@ io.on("connection", (socket) => {
 		}
 	});
 
+	// Report taboo - watchers can report if describer used taboo word
+	socket.on("report-taboo", (data) => {
+		const { roomCode, word, voter, voterTeam } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.gameState) {
+			const gs = room.gameState;
+
+			// Check if taboo reporting is enabled
+			if (room.tabooReporting === false) {
+				console.log(`Taboo reporting is disabled in room ${roomCode}`);
+				return;
+			}
+
+			// Initialize taboo tracking if not exists
+			if (!gs.tabooVotes) {
+				gs.tabooVotes = {};
+			}
+			if (!gs.confirmedTaboos) {
+				gs.confirmedTaboos = [];
+			}
+
+			// Check if voter is on the watching team (not the current playing team)
+			if (voterTeam === gs.currentTeamIndex) {
+				console.log(`Invalid taboo vote: ${voter} is on the current team`);
+				return;
+			}
+
+			// Initialize votes for this word if not exists
+			if (!gs.tabooVotes[word]) {
+				gs.tabooVotes[word] = [];
+			}
+
+			// Check if already voted
+			if (gs.tabooVotes[word].includes(voter)) {
+				console.log(`${voter} already voted for ${word} as taboo`);
+				return;
+			}
+
+			// Add vote
+			gs.tabooVotes[word].push(voter);
+			console.log(`${voter} reported "${word}" as taboo. Votes: ${gs.tabooVotes[word].length}`);
+
+			// Calculate total watching team players (all teams except current team)
+			let watchingTeamPlayers = 0;
+			gs.teams.forEach((team, idx) => {
+				if (idx !== gs.currentTeamIndex) {
+					watchingTeamPlayers += team.players.length;
+				}
+			});
+
+			// Check if majority (>50%) voted
+			const voteCount = gs.tabooVotes[word].length;
+			const threshold = Math.floor(watchingTeamPlayers / 2) + 1;
+			let newlyConfirmed = null;
+			let wordPoints = 0;
+
+			if (voteCount >= threshold && !gs.confirmedTaboos.includes(word)) {
+				gs.confirmedTaboos.push(word);
+				newlyConfirmed = word;
+				// Find the word's points from current words
+				const wordObj = gs.currentWords?.find(w => w.word === word);
+				wordPoints = wordObj?.points || 0;
+				// Track taboo words with points for turn summary
+				if (!gs.confirmedTabooDetails) {
+					gs.confirmedTabooDetails = [];
+				}
+				gs.confirmedTabooDetails.push({ word, points: wordPoints });
+				console.log(`"${word}" confirmed as TABOO by majority vote (${voteCount}/${watchingTeamPlayers}), ${wordPoints} pts`);
+			}
+
+			// Get current team players for client-side filtering
+			const currentTeamPlayers = gs.teams[gs.currentTeamIndex]?.players || [];
+
+			// Broadcast to all players
+			io.to(roomCode).emit("taboo-vote-sync", {
+				tabooVotes: gs.tabooVotes,
+				confirmedTaboos: gs.confirmedTaboos,
+				newlyConfirmed: newlyConfirmed,
+				wordPoints: wordPoints,
+				currentTeamIndex: gs.currentTeamIndex,
+				currentTeamPlayers: currentTeamPlayers, // Include current team players for notification filtering
+			});
+		}
+	});
+
 	// End turn
 	socket.on("end-turn", (data) => {
 		const {
@@ -480,24 +1891,393 @@ io.on("connection", (socket) => {
 		if (room && room.gameState) {
 			const gs = room.gameState;
 
-			// Clear current words and turn state since turn has ended
-			gs.currentWords = [];
-			gs.timeRemaining = 0;
-			gs.guessedByPlayer = [];
+			// GRACE PERIOD: Delay turn finalization to allow last-second guesses to be processed
+			// Keep turnStartTime intact so grace period guesses can still be validated
+			const GRACE_PERIOD_MS = 2000; // 2 second grace period
 
-			// Just broadcast the turn ended event
-			// Don't rotate describer here - it will be done when next-turn is called
-			io.to(roomCode).emit("turn-ended", {
-				guessedCount,
-				skippedCount,
-				totalPoints,
-				guessedWords,
-				guessedByPlayer,
-				allWords, // Send all words to everyone for display
-				gameState: gs,
+			// Mark that we're in grace period (turn is ending but still accepting guesses)
+			gs.inGracePeriod = true;
+
+			console.log(`[END-TURN] Room ${roomCode}: Starting ${GRACE_PERIOD_MS}ms grace period for last-second guesses`);
+
+			// Notify all players that grace period has started (for UI transition)
+			io.to(roomCode).emit("grace-period-start", {
+				duration: GRACE_PERIOD_MS,
+				message: "Finalizing results..."
 			});
+
+			// Delay the actual turn finalization
+			setTimeout(() => {
+				const roomAfterGrace = gameRooms.get(roomCode);
+				if (!roomAfterGrace || !roomAfterGrace.gameState) return;
+
+				const gsAfterGrace = roomAfterGrace.gameState;
+				gsAfterGrace.inGracePeriod = false;
+
+				// Get describer info for this turn
+				const currentTeam = gsAfterGrace.teams[gsAfterGrace.currentTeamIndex];
+				const describerIndex = gsAfterGrace.currentDescriberIndex[gsAfterGrace.currentTeamIndex];
+				const describer = currentTeam?.players?.[describerIndex] || 'Unknown';
+
+				// Check if there are any reported taboo words that need voting
+				const pendingTabooWords = [];
+				if (gsAfterGrace.confirmedTaboos && gsAfterGrace.confirmedTaboos.length > 0 && gsAfterGrace.confirmedTabooDetails) {
+					gsAfterGrace.confirmedTabooDetails.forEach(taboo => {
+						pendingTabooWords.push({
+							word: taboo.word,
+							points: taboo.points,
+							teamIndex: gsAfterGrace.currentTeamIndex,
+							describer: describer
+						});
+					});
+				}
+
+				console.log(`[END-TURN] Room ${roomCode}: Grace period ended. pendingTabooWords count = ${pendingTabooWords.length}`);
+				console.log(`[END-TURN] Room ${roomCode}: Final guessed words count = ${gsAfterGrace.currentTurnGuessedWords?.length || 0}`);
+				if (pendingTabooWords.length > 0) {
+					console.log(`[END-TURN] Pending taboo words:`, pendingTabooWords);
+				}
+
+				// Get all socket IDs in the room for debugging
+				const roomSockets = io.sockets.adapter.rooms.get(roomCode);
+				const socketCount = roomSockets ? roomSockets.size : 0;
+				console.log(`[END-TURN] Broadcasting turn-ended to room ${roomCode} with ${socketCount} connected sockets`);
+				if (roomSockets) {
+					const socketIds = Array.from(roomSockets);
+					console.log(`[END-TURN] Socket IDs in room:`, socketIds);
+					// Also log the player names for each socket
+					socketIds.forEach(sid => {
+						const s = io.sockets.sockets.get(sid);
+						console.log(`[END-TURN] Socket ${sid} player: ${s?.playerName || 'unknown'}`);
+					});
+				}
+
+				// Calculate final points from server's authoritative guessedByPlayer list
+				const serverGuessedWordStrings = gsAfterGrace.currentTurnGuessedWords || [];
+				const serverGuessedByPlayer = gsAfterGrace.guessedByPlayer || [];
+				const finalTotalPoints = serverGuessedByPlayer.reduce((sum, g) => sum + (g.points || 0), 0);
+
+				// Use server's currentWords if available, fallback to client's allWords
+				const allWordsSource = gsAfterGrace.currentWords?.length > 0 ? gsAfterGrace.currentWords : (allWords || []);
+
+				// Build full word objects for guessedWords (frontend expects objects with word, points, difficulty)
+				const serverGuessedWords = serverGuessedWordStrings.map(wordStr => {
+					// Find the full word object from allWords
+					const fullWordObj = allWordsSource.find(w => w.word === wordStr);
+					if (fullWordObj) {
+						return fullWordObj;
+					}
+					// Fallback: find from guessedByPlayer to get at least the points
+					const guessInfo = serverGuessedByPlayer.find(g => g.word === wordStr);
+					return {
+						word: wordStr,
+						points: guessInfo?.points || 0,
+						difficulty: 'medium' // Default difficulty if not found
+					};
+				});
+
+				// Broadcast the turn ended event with pending taboo info to ALL sockets in room
+				// Use server's authoritative data, not client-provided data
+				io.to(roomCode).emit("turn-ended", {
+					guessedCount: serverGuessedWords.length,
+					skippedCount,
+					totalPoints: finalTotalPoints,
+					guessedWords: serverGuessedWords,
+					guessedByPlayer: serverGuessedByPlayer,
+					allWords: allWordsSource,
+					gameState: gsAfterGrace,
+					pendingTabooWords: pendingTabooWords, // Include pending taboos in turn-ended event
+				});
+
+				// Store round history for session persistence
+				if (!roomAfterGrace.roundHistory) {
+					roomAfterGrace.roundHistory = [];
+				}
+				roomAfterGrace.roundHistory.push({
+					round: gsAfterGrace.round,
+					teamIndex: gsAfterGrace.currentTeamIndex,
+					describer: describer,
+					teamName: gsAfterGrace.teams[gsAfterGrace.currentTeamIndex]?.name || `Team ${gsAfterGrace.currentTeamIndex + 1}`,
+					tabooWords: pendingTabooWords.length > 0 ? pendingTabooWords.map(t => ({
+						word: t.word,
+						points: t.points,
+						confirmed: false // Will be updated when voting completes
+					})) : undefined
+				});
+
+				// Clear current words and turn state AFTER grace period
+				gsAfterGrace.currentWords = [];
+				gsAfterGrace.timeRemaining = 0;
+				gsAfterGrace.guessedByPlayer = [];
+				gsAfterGrace.turnActive = false;
+				gsAfterGrace.turnStartTime = null;
+
+				// If there are pending taboo words, handle based on taboo settings
+				if (pendingTabooWords.length > 0) {
+					const tabooVotingEnabled = roomAfterGrace.tabooVoting !== false; // Default to enabled
+
+					if (tabooVotingEnabled) {
+						// Voting is enabled - start the voting phase
+						gsAfterGrace.pendingTabooVoting = {
+							words: pendingTabooWords,
+							votes: {},
+							timeRemaining: 30,
+							startTime: Date.now()
+						};
+
+						// Broadcast voting start after a short delay to ensure turn-ended is processed first
+						setTimeout(() => {
+							io.to(roomCode).emit("taboo-voting-start", {
+								pendingTabooWords: pendingTabooWords
+							});
+						}, 100);
+
+						// Start voting timer
+						const votingInterval = setInterval(() => {
+							const room = gameRooms.get(roomCode);
+							if (!room || !room.gameState || !room.gameState.pendingTabooVoting) {
+								clearInterval(votingInterval);
+								return;
+							}
+
+							const voting = room.gameState.pendingTabooVoting;
+							const elapsed = Math.floor((Date.now() - voting.startTime) / 1000);
+							voting.timeRemaining = Math.max(0, 30 - elapsed);
+
+							// Sync time to all players
+							io.to(roomCode).emit("round-end-vote-sync", {
+								votes: voting.votes,
+								timeRemaining: voting.timeRemaining
+							});
+
+							// Check if voting time is up
+							if (voting.timeRemaining <= 0) {
+								clearInterval(votingInterval);
+								completeTabooVoting(roomCode);
+							}
+						}, 1000);
+					} else {
+						// Voting is disabled but reporting is on - auto-confirm all reported taboos
+						console.log(`[TABOO] Voting disabled in room ${roomCode} - auto-confirming ${pendingTabooWords.length} taboos`);
+
+						// Initialize confirmedTaboosByTeam if not exists (store total deductions per team)
+						if (!gsAfterGrace.confirmedTaboosByTeam) {
+							gsAfterGrace.confirmedTaboosByTeam = {};
+						}
+
+						// All reported taboos are auto-confirmed - build proper format
+						const confirmedTabooWords = pendingTabooWords.map(tabooWord => ({
+							word: tabooWord.word,
+							points: tabooWord.points,
+							teamIndex: tabooWord.teamIndex,
+							describer: tabooWord.describer
+						}));
+
+						// Add up deductions and track per player
+						confirmedTabooWords.forEach(taboo => {
+							// Use teamIndex from the taboo word itself
+							if (!gsAfterGrace.confirmedTaboosByTeam[taboo.teamIndex]) {
+								gsAfterGrace.confirmedTaboosByTeam[taboo.teamIndex] = 0;
+							}
+							gsAfterGrace.confirmedTaboosByTeam[taboo.teamIndex] += taboo.points;
+
+							// Also track taboo words per player in playerContributions
+							if (taboo.describer) {
+								if (!gsAfterGrace.playerContributions[taboo.describer]) {
+									gsAfterGrace.playerContributions[taboo.describer] = {
+										points: 0,
+										guessedWords: [],
+										describedWords: [],
+										tabooWords: []
+									};
+								}
+								if (!gsAfterGrace.playerContributions[taboo.describer].tabooWords) {
+									gsAfterGrace.playerContributions[taboo.describer].tabooWords = [];
+								}
+								gsAfterGrace.playerContributions[taboo.describer].tabooWords.push({
+									word: taboo.word,
+									points: taboo.points
+								});
+							}
+						});
+
+						// Emit voting complete with all words confirmed (using same format as completeTabooVoting)
+						io.to(roomCode).emit("taboo-voting-complete", {
+							confirmedTabooWords: confirmedTabooWords,
+							failedTabooWords: [],
+							confirmedTaboosByTeam: gsAfterGrace.confirmedTaboosByTeam
+						});
+					}
+				}
+			}, GRACE_PERIOD_MS); // End of setTimeout for grace period
 		}
 	});
+
+	// Handle round-end taboo voting
+	socket.on("round-end-taboo-vote", (data) => {
+		const { roomCode, word, voter, voteType } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.gameState && room.gameState.pendingTabooVoting) {
+			const voting = room.gameState.pendingTabooVoting;
+			const gs = room.gameState;
+
+			// Initialize votes for this word if not exists (now has yes and no arrays)
+			if (!voting.votes[word]) {
+				voting.votes[word] = { yes: [], no: [] };
+			}
+
+			// Check if already voted (in either yes or no)
+			if (voting.votes[word].yes.includes(voter) || voting.votes[word].no.includes(voter)) {
+				return;
+			}
+
+			// Add vote to appropriate array
+			if (voteType === 'yes') {
+				voting.votes[word].yes.push(voter);
+			} else {
+				voting.votes[word].no.push(voter);
+			}
+
+			// Calculate if word is finalized (>60% yes votes of total votes cast)
+			const yesCount = voting.votes[word].yes.length;
+			const noCount = voting.votes[word].no.length;
+			const totalVotes = yesCount + noCount;
+			const yesPercentage = totalVotes > 0 ? (yesCount / totalVotes) * 100 : 0;
+
+			// Update finalized status in pending words
+			const wordIndex = voting.words.findIndex(w => w.word === word);
+			if (wordIndex >= 0) {
+				voting.words[wordIndex].finalized = yesPercentage >= 60;
+			}
+
+			// Broadcast updated votes with finalized status
+			io.to(roomCode).emit("round-end-vote-sync", {
+				votes: voting.votes,
+				timeRemaining: voting.timeRemaining,
+				pendingTabooWords: voting.words
+			});
+
+			// Check if all players have voted on all words - end voting early
+			const totalPlayers = gs.teams.reduce((sum, team) => sum + team.players.length, 0);
+			let allVoted = true;
+			for (const pendingWord of voting.words) {
+				const wordVotes = voting.votes[pendingWord.word];
+				const wordTotalVotes = (wordVotes?.yes?.length || 0) + (wordVotes?.no?.length || 0);
+				if (wordTotalVotes < totalPlayers) {
+					allVoted = false;
+					break;
+				}
+			}
+
+			if (allVoted) {
+				console.log(`[VOTING] All ${totalPlayers} players have voted on all words - ending voting early`);
+				completeTabooVoting(roomCode);
+			}
+		}
+	});
+
+	// Helper function to complete taboo voting
+	function completeTabooVoting(roomCode) {
+		const room = gameRooms.get(roomCode);
+		if (!room || !room.gameState || !room.gameState.pendingTabooVoting) {
+			return;
+		}
+
+		const gs = room.gameState;
+		const voting = gs.pendingTabooVoting;
+
+		const confirmedTabooWords = [];
+		const failedTabooWords = [];
+
+		voting.words.forEach(tabooWord => {
+			const yesCount = voting.votes[tabooWord.word]?.yes?.length || 0;
+			const noCount = voting.votes[tabooWord.word]?.no?.length || 0;
+			const totalVotes = yesCount + noCount;
+			// 60% threshold based on votes cast (yes votes / total votes)
+			const yesPercentage = totalVotes > 0 ? (yesCount / totalVotes) * 100 : 0;
+
+			if (yesPercentage >= 60) {
+				confirmedTabooWords.push({
+					word: tabooWord.word,
+					points: tabooWord.points,
+					teamIndex: tabooWord.teamIndex,
+					describer: tabooWord.describer
+				});
+			} else {
+				failedTabooWords.push({
+					word: tabooWord.word,
+					points: tabooWord.points,
+					teamIndex: tabooWord.teamIndex,
+					describer: tabooWord.describer
+				});
+			}
+		});
+
+		// Track confirmed taboo deductions per team
+		if (!gs.confirmedTaboosByTeam) {
+			gs.confirmedTaboosByTeam = {};
+		}
+		confirmedTabooWords.forEach(taboo => {
+			if (!gs.confirmedTaboosByTeam[taboo.teamIndex]) {
+				gs.confirmedTaboosByTeam[taboo.teamIndex] = 0;
+			}
+			gs.confirmedTaboosByTeam[taboo.teamIndex] += taboo.points;
+
+			// Also track taboo words per player in playerContributions
+			if (taboo.describer) {
+				if (!gs.playerContributions[taboo.describer]) {
+					gs.playerContributions[taboo.describer] = {
+						points: 0,
+						guessedWords: [],
+						describedWords: [],
+						tabooWords: []
+					};
+				}
+				if (!gs.playerContributions[taboo.describer].tabooWords) {
+					gs.playerContributions[taboo.describer].tabooWords = [];
+				}
+				gs.playerContributions[taboo.describer].tabooWords.push({
+					word: taboo.word,
+					points: taboo.points
+				});
+			}
+		});
+
+		// Update roundHistory to mark confirmed/failed taboos
+		if (room.roundHistory) {
+			const confirmedWordNames = confirmedTabooWords.map(t => t.word);
+			const failedWordNames = failedTabooWords.map(t => t.word);
+
+			room.roundHistory = room.roundHistory.map(entry => {
+				if (entry.tabooWords && entry.tabooWords.length > 0) {
+					return {
+						...entry,
+						tabooWords: entry.tabooWords
+							.filter(t => !failedWordNames.includes(t.word)) // Remove failed taboos
+							.map(t => ({
+								...t,
+								confirmed: confirmedWordNames.includes(t.word) ? true : t.confirmed
+							}))
+					};
+				}
+				return entry;
+			});
+		}
+
+		// Clear the voting state
+		gs.pendingTabooVoting = null;
+		gs.confirmedTaboos = [];
+		gs.confirmedTabooDetails = [];
+		gs.tabooVotes = {};
+
+		// Broadcast voting complete with both confirmed and failed words and updated deductions
+		io.to(roomCode).emit("taboo-voting-complete", {
+			confirmedTabooWords: confirmedTabooWords,
+			failedTabooWords: failedTabooWords,
+			confirmedTaboosByTeam: gs.confirmedTaboosByTeam
+		});
+	}
 
 	// Skip turn - describer wants to skip, pass to next teammate
 	socket.on("skip-turn", (data) => {
@@ -506,6 +2286,10 @@ io.on("connection", (socket) => {
 
 		if (room && room.gameState) {
 			const gs = room.gameState;
+
+			// Mark turn as inactive when skipped
+			gs.turnActive = false;
+			gs.turnStartTime = null;
 
 			// Increment turn count for this team
 			if (!gs.turnCount) {
@@ -540,6 +2324,10 @@ io.on("connection", (socket) => {
 
 		if (room && room.gameState) {
 			const gs = room.gameState;
+
+			// Mark turn as inactive when skipped
+			gs.turnActive = false;
+			gs.turnStartTime = null;
 
 			// Move to next describer in the current team
 			const currentTeam = gs.currentTeamIndex;
@@ -585,7 +2373,27 @@ io.on("connection", (socket) => {
 
 			// Check if game is over
 			if (gs.round > gs.maxRounds) {
-				io.to(roomCode).emit("game-over", { gameState: gs });
+				// Game over - send feedback before emitting
+				handleRoomClosure(room, roomCode, "Game completed naturally").then(() => {
+					// Update per-team stats then emit final state including room stats
+					updateStatsOnGameEnd(room);
+					gs.gameStarted = false;
+					io.to(roomCode).emit("game-over", { gameState: gs, room });
+					// Clear player team assignments immediately after game end so lobby shows empty teams
+					try {
+						for (const p of room.players) {
+							p.team = null
+							// Hide players from waiting list until they individually opt back in
+							p.showInWaiting = false
+							// Reset captain status when game ends
+							p.isCaptain = false
+						}
+						room.started = false
+						io.to(roomCode).emit('team-updated', { room })
+					} catch (e) {
+						console.error('Error clearing teams after natural game-over:', e)
+					}
+				});
 				return;
 			}
 
@@ -655,8 +2463,11 @@ io.on("connection", (socket) => {
 
 				// If room is empty, delete it
 				if (room.players.length === 0) {
-					gameRooms.delete(roomCode);
-					console.log(`Room ${roomCode} deleted (empty after leave)`);
+					// Send feedback before deleting room
+					handleRoomClosure(room, roomCode, "Room empty after player left").then(() => {
+						gameRooms.delete(roomCode);
+						console.log(`Room ${roomCode} deleted (empty after leave)`);
+					});
 				} else {
 					// Remove player from teams if game has started
 					if (room.gameState) {
@@ -670,7 +2481,7 @@ io.on("connection", (socket) => {
 								if (
 									teamIndex === currentTeamIndex &&
 									room.gameState.currentDescriberIndex[teamIndex] ===
-										teamPlayerIndex
+									teamPlayerIndex
 								) {
 									describerLeft = true;
 								}
@@ -694,7 +2505,7 @@ io.on("connection", (socket) => {
 									if (
 										team.players.length > 0 &&
 										room.gameState.currentDescriberIndex[teamIndex] >=
-											team.players.length
+										team.players.length
 									) {
 										room.gameState.currentDescriberIndex[teamIndex] = 0;
 									}
@@ -712,12 +2523,28 @@ io.on("connection", (socket) => {
 							room.gameState.gameStarted
 						) {
 							if (team0Empty && team1Empty) {
-								io.to(roomCode).emit("game-over", {
-									gameState: room.gameState,
-									message: "All players left. Game ended.",
+								// Both teams empty - send feedback before ending
+								handleRoomClosure(room, roomCode, "All players left").then(() => {
+									// Update team stats and emit game over with room metadata
+									updateStatsOnGameEnd(room);
+									io.to(roomCode).emit("game-over", {
+										gameState: room.gameState,
+										message: "All players left. Game ended.",
+										room,
+									});
+									// Clear player team assignments after game end
+									try {
+										for (const p of room.players) {
+											p.team = null
+											p.showInWaiting = false
+										}
+										room.gameState = null;
+										room.started = false;
+										io.to(roomCode).emit('team-updated', { room })
+									} catch (e) {
+										console.error('Error clearing teams after all-players-left game-over:', e)
+									}
 								});
-								room.gameState = null;
-								room.started = false;
 							} else {
 								const otherTeamIndex = currentTeamIndex === 0 ? 1 : 0;
 								if (room.gameState.teams[otherTeamIndex].players.length > 0) {
@@ -769,9 +2596,94 @@ io.on("connection", (socket) => {
 	});
 
 	// Bonus words added
+	// Toggle co-admin (host only) - can add or remove co-admin
+	socket.on("toggle-co-admin", (data) => {
+		const { roomCode, playerName } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id) {
+			// Initialize co-admins array if it doesn't exist
+			if (!room.coAdmins) {
+				room.coAdmins = [];
+			}
+
+			// Find the player's socket id
+			const player = room.players.find((p) => p.name === playerName);
+			if (player) {
+				const isCurrentlyCoAdmin = room.coAdmins.includes(player.id);
+
+				if (isCurrentlyCoAdmin) {
+					// Remove co-admin
+					room.coAdmins = room.coAdmins.filter(id => id !== player.id);
+
+					// Notify the player they are no longer a co-admin
+					io.to(player.id).emit("removed-co-admin", {
+						message: "You are no longer a co-admin."
+					});
+
+					// Notify all players in the room
+					io.to(roomCode).emit("player-demoted", {
+						playerName: playerName,
+						message: `${playerName} is no longer a co-admin.`
+					});
+
+					console.log(`${playerName} is no longer a co-admin in room ${roomCode}`);
+				} else {
+					// Add co-admin
+					room.coAdmins.push(player.id);
+
+					// Notify the player they are now a co-admin
+					io.to(player.id).emit("made-co-admin", {
+						message: "You are now a co-admin! You have access to admin controls."
+					});
+
+					// Notify all players in the room
+					io.to(roomCode).emit("player-promoted", {
+						playerName: playerName,
+						message: `${playerName} is now a co-admin!`
+					});
+
+					console.log(`${playerName} is now a co-admin in room ${roomCode}`);
+				}
+			}
+		}
+	});
+
+	// Legacy: Make co-admin (host only) - kept for backwards compatibility
+	socket.on("make-co-admin", (data) => {
+		const { roomCode, playerName } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && room.host === socket.id) {
+			// Initialize co-admins array if it doesn't exist
+			if (!room.coAdmins) {
+				room.coAdmins = [];
+			}
+
+			// Find the player's socket id
+			const player = room.players.find((p) => p.name === playerName);
+			if (player && !room.coAdmins.includes(player.id)) {
+				room.coAdmins.push(player.id);
+
+				// Notify the player they are now a co-admin
+				io.to(player.id).emit("made-co-admin", {
+					message: "You are now a co-admin! You have access to admin controls."
+				});
+
+				// Notify all players in the room
+				io.to(roomCode).emit("player-promoted", {
+					playerName: playerName,
+					message: `${playerName} is now a co-admin!`
+				});
+
+				console.log(`${playerName} is now a co-admin in room ${roomCode}`);
+			}
+		}
+	});
+
 	// Kick player (host only)
 	socket.on("kick-player", (data) => {
-		const { roomCode, playerName } = data;
+		const { roomCode, playerName, ban } = data;
 		const room = gameRooms.get(roomCode);
 
 		if (room && room.host === socket.id) {
@@ -780,6 +2692,29 @@ io.on("connection", (socket) => {
 			if (playerIndex !== -1) {
 				const kickedPlayer = room.players[playerIndex];
 				room.players.splice(playerIndex, 1);
+
+				// Add to banned list if ban option is true
+				if (ban) {
+					// Ban by player name (as fallback)
+					if (!room.bannedPlayers) {
+						room.bannedPlayers = new Set();
+					}
+					room.bannedPlayers.add(playerName);
+
+					// Ban by IP address (main ban mechanism)
+					if (!room.bannedIPs) {
+						room.bannedIPs = new Set();
+					}
+					// Get the IP of the kicked player's socket
+					const kickedSocket = io.sockets.sockets.get(kickedPlayer.id);
+					if (kickedSocket) {
+						const kickedIP = getClientIP(kickedSocket);
+						room.bannedIPs.add(kickedIP);
+						console.log(`IP ${kickedIP} banned from room ${roomCode}`);
+					}
+
+					console.log(`${playerName} was banned from room ${roomCode}`);
+				}
 
 				// Remove from game state teams if game has started
 				if (room.gameState) {
@@ -805,7 +2740,7 @@ io.on("connection", (socket) => {
 								if (
 									team.players.length > 0 &&
 									room.gameState.currentDescriberIndex[teamIndex] >=
-										team.players.length
+									team.players.length
 								) {
 									room.gameState.currentDescriberIndex[teamIndex] = 0;
 								}
@@ -823,48 +2758,56 @@ io.on("connection", (socket) => {
 
 				// Notify the kicked player specifically
 				io.to(kickedPlayer.id).emit("you-were-kicked", {
-					message: "You have been kicked from the game by the host.",
+					message: ban
+						? "You have been banned from this room by the host."
+						: "You have been kicked from the game by the host.",
+					banned: ban || false,
 				});
 
-				console.log(`${playerName} was kicked from room ${roomCode}`);
+				console.log(`${playerName} was kicked from room ${roomCode}${ban ? ' (banned)' : ''}`);
 			}
 		}
 	});
 
-	// Set describer (host only)
+	// Set describer (admin - host or co-admin)
 	socket.on("set-describer", (data) => {
 		const { roomCode, teamIndex, playerIndex } = data;
 		const room = gameRooms.get(roomCode);
 
-		if (room && room.host === socket.id && room.gameState) {
-			const gs = room.gameState;
+		if (room && room.gameState) {
+			const player = room.players.find(p => p.id === socket.id);
+			const isCaptainOfTeam = player && player.isCaptain && player.team === teamIndex;
 
-			// Validate team and player indices
-			if (
-				teamIndex >= 0 &&
-				teamIndex < gs.teams.length &&
-				playerIndex >= 0 &&
-				playerIndex < gs.teams[teamIndex].players.length
-			) {
-				// Set the describer for the specified team
-				gs.currentDescriberIndex[teamIndex] = playerIndex;
+			if (isAdmin(room, socket.id) || isCaptainOfTeam) {
+				const gs = room.gameState;
 
-				// If setting describer for current team, also update turn
-				if (teamIndex === gs.currentTeamIndex) {
-					io.to(roomCode).emit("describer-changed", {
-						gameState: gs,
-						message: `${gs.teams[teamIndex].players[playerIndex]} is now the describer for ${gs.teams[teamIndex].name}`,
-					});
-				} else {
-					io.to(roomCode).emit("describer-changed", {
-						gameState: gs,
-						message: `${gs.teams[teamIndex].players[playerIndex]} will be the next describer for ${gs.teams[teamIndex].name}`,
-					});
+				// Validate team and player indices
+				if (
+					teamIndex >= 0 &&
+					teamIndex < gs.teams.length &&
+					playerIndex >= 0 &&
+					playerIndex < gs.teams[teamIndex].players.length
+				) {
+					// Set the describer for the specified team
+					gs.currentDescriberIndex[teamIndex] = playerIndex;
+
+					// If setting describer for current team, also update turn
+					if (teamIndex === gs.currentTeamIndex) {
+						io.to(roomCode).emit("describer-changed", {
+							gameState: gs,
+							message: `${gs.teams[teamIndex].players[playerIndex]} is now the describer for ${gs.teams[teamIndex].name}`,
+						});
+					} else {
+						io.to(roomCode).emit("describer-changed", {
+							gameState: gs,
+							message: `${gs.teams[teamIndex].players[playerIndex]} will be the next describer for ${gs.teams[teamIndex].name}`,
+						});
+					}
+
+					console.log(
+						`Host set describer for team ${teamIndex} to player ${playerIndex} in room ${roomCode}`
+					);
 				}
-
-				console.log(
-					`Host set describer for team ${teamIndex} to player ${playerIndex} in room ${roomCode}`
-				);
 			}
 		}
 	});
@@ -874,17 +2817,33 @@ io.on("connection", (socket) => {
 		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
 
-		if (room && room.host === socket.id && room.gameState) {
-			// Emit game over with admin message
-			io.to(roomCode).emit("game-over", {
-				gameState: room.gameState,
-				message: "Game ended by host",
+		if (room && isAdmin(room, socket.id) && room.gameState) {
+			// Send feedback to Google Sheets before ending game
+			handleRoomClosure(room, roomCode, "Game ended by admin").then(() => {
+				// Update stats and emit game over with admin message and room metadata
+				updateStatsOnGameEnd(room);
+				room.gameState.gameStarted = false;
+				io.to(roomCode).emit("game-over", {
+					gameState: room.gameState,
+					message: "Game ended by host",
+					room,
+				});
+				// Clear player team assignments after admin ended the game
+				try {
+					for (const p of room.players) {
+						p.team = null
+						p.showInWaiting = false
+						// Reset captain status when game ends
+						p.isCaptain = false
+					}
+					room.gameState = null;
+					room.started = false;
+					io.to(roomCode).emit('team-updated', { room })
+				} catch (e) {
+					console.error('Error clearing teams after admin-end-game:', e)
+				}
+				console.log(`Host ended game in room ${roomCode}`);
 			});
-
-			// Clear game state
-			room.gameState = null;
-			room.started = false;
-			console.log(`Host ended game in room ${roomCode}`);
 		}
 	});
 
@@ -893,7 +2852,7 @@ io.on("connection", (socket) => {
 		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
 
-		if (room && room.host === socket.id && room.gameState) {
+		if (room && isAdmin(room, socket.id) && room.gameState) {
 			const gs = room.gameState;
 
 			// Move to next team
@@ -903,13 +2862,28 @@ io.on("connection", (socket) => {
 			if (gs.currentTeamIndex === 0) {
 				gs.round++;
 				if (gs.round > gs.maxRounds) {
-					// Game over
-					io.to(roomCode).emit("game-over", {
-						gameState: gs,
-						message: "Maximum rounds reached",
+					// Game over - send feedback before emitting
+					handleRoomClosure(room, roomCode, "Maximum rounds reached").then(() => {
+						// Update stats and emit final game-over with room
+						updateStatsOnGameEnd(room);
+						io.to(roomCode).emit("game-over", {
+							gameState: gs,
+							message: "Maximum rounds reached",
+							room,
+						});
+						// Clear player team assignments after game end due to max rounds
+						try {
+							for (const p of room.players) {
+								p.team = null
+								p.showInWaiting = false
+							}
+							room.gameState = null
+							room.started = false
+							io.to(roomCode).emit('team-updated', { room })
+						} catch (e) {
+							console.error('Error clearing teams after max-rounds game end (admin-skip-turn):', e)
+						}
 					});
-					room.gameState = null;
-					room.started = false;
 					return;
 				}
 			}
@@ -917,9 +2891,8 @@ io.on("connection", (socket) => {
 			// Emit turn skipped
 			io.to(roomCode).emit("turn-skipped", {
 				gameState: gs,
-				message: `Turn skipped by host. It's now ${
-					gs.teams[gs.currentTeamIndex].name
-				}'s turn!`,
+				message: `Turn skipped by host. It's now ${gs.teams[gs.currentTeamIndex].name
+					}'s turn!`,
 			});
 
 			console.log(`Host skipped turn in room ${roomCode}`);
@@ -931,14 +2904,13 @@ io.on("connection", (socket) => {
 		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
 
-		if (room && room.host === socket.id) {
+		if (room && isAdmin(room, socket.id)) {
 			room.teamSwitchingLocked = !room.teamSwitchingLocked;
 			io.to(roomCode).emit("team-switching-locked", {
 				locked: room.teamSwitchingLocked,
 			});
 			console.log(
-				`Team switching ${
-					room.teamSwitchingLocked ? "locked" : "unlocked"
+				`Team switching ${room.teamSwitchingLocked ? "locked" : "unlocked"
 				} in room ${roomCode}`
 			);
 		}
@@ -949,7 +2921,7 @@ io.on("connection", (socket) => {
 		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
 
-		if (room && room.host === socket.id) {
+		if (room && isAdmin(room, socket.id)) {
 			// Get all players
 			const allPlayers = [...room.players];
 
@@ -959,11 +2931,15 @@ io.on("connection", (socket) => {
 				[allPlayers[i], allPlayers[j]] = [allPlayers[j], allPlayers[i]];
 			}
 
-			// Split players into two teams
-			const midpoint = Math.ceil(allPlayers.length / 2);
+			// Determine number of teams (check game state if started, otherwise use room teamCount)
+			const teamCount = room.started && room.gameState
+				? room.gameState.teamCount
+				: (room.teamCount || 2);
 
+			// Distribute players evenly across all teams
 			allPlayers.forEach((player, index) => {
-				player.team = index < midpoint ? 0 : 1;
+				player.team = index % teamCount; // Cycle through teams: 0, 1, 2, 0, 1, 2, ...
+				player.isCaptain = false; // Reset captain status when randomizing
 			});
 
 			// If game is in progress, also update the game state
@@ -980,22 +2956,485 @@ io.on("connection", (socket) => {
 					}
 				});
 
-				// Reset describer indices
-				room.gameState.currentDescriberIndex = [0, 0];
+				// Reset describer indices to account for new team compositions
+				room.gameState.currentDescriberIndex = Array(teamCount).fill(0);
 
 				io.to(roomCode).emit("team-updated-midgame", {
 					room,
 					gameState: room.gameState,
+					message: "Teams have been randomized by the host!"
 				});
 			} else {
-				io.to(roomCode).emit("team-updated", { room });
+				io.to(roomCode).emit("team-updated", {
+					room,
+					message: "Teams have been randomized by the host!"
+				});
 			}
 
-			console.log(`Teams randomized in room ${roomCode}`);
+			console.log(`Teams randomized in room ${roomCode} across ${teamCount} teams`);
 		}
 	});
 
-	// Chat message
+	// Captain draft: start selection flow (admin triggers)
+	socket.on('start-captain-selection', (data) => {
+		const { roomCode } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !isAdmin(room, socket.id)) return
+
+		// At least 4 players required (2 captains + at least 1 player to pick each, or similar logic)
+		if (room.players.length < 4) {
+			socket.emit('error', { message: 'Need at least 4 players in the lobby for Team Division.' })
+			return
+		}
+
+		// Notify clients to open captain selection UI (admin will pick captains)
+		io.to(roomCode).emit('captain-selection-started', { roomCode })
+		console.log(`Captain selection started in room ${roomCode} by admin ${socket.id}`)
+	})
+
+	// Admin previews a captain selection so everyone can see interim picks
+	socket.on('admin-preview-captain', (data) => {
+		const { roomCode, index, playerId } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !isAdmin(room, socket.id)) return
+		const playerName = room.players.find(p => p.id === playerId)?.name || null
+		// broadcast preview to all clients in room
+		io.to(roomCode).emit('captain-preview', { index, playerId: playerId || null, playerName })
+	})
+
+	// Admin confirms selected captains
+	socket.on('admin-set-captains', (data) => {
+		const { roomCode, captains } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !isAdmin(room, socket.id)) return
+		try {
+			const teamCount = room.teamCount || 2
+			if (!Array.isArray(captains) || captains.length !== teamCount) {
+				console.warn('Invalid captains payload')
+				return
+			}
+
+			// Validate captains are present in room
+			// Ensure captains are unique and present
+			const uniqueCaptains = Array.from(new Set(captains))
+			if (uniqueCaptains.length !== captains.length) {
+				console.warn('Duplicate captains selected')
+				return
+			}
+			const captainPlayers = captains.map(cid => room.players.find(p => p.id === cid)).filter(Boolean)
+			if (captainPlayers.length !== teamCount) {
+				console.warn('One or more captains not found in room')
+				return
+			}
+
+			// Initialize draft state on room
+			const availablePlayers = room.players.filter(p => !captains.includes(p.id)).map(p => ({ id: p.id, name: p.name }))
+			room.draftState = {
+				captains: captains.slice(), // array of socket ids
+				teams: Array.from({ length: teamCount }).map((_, i) => ({ players: [captainPlayers[i].name] })),
+				availablePlayers: availablePlayers,
+				initialAvailableCount: availablePlayers.length, // Track initial count for even/odd logic
+				currentCaptainIndex: null,
+				ready: {}, // map of captainId -> boolean
+				coinResult: null
+			}
+
+			// mark captains' team assignment and isCaptain status
+			room.players.forEach(p => p.isCaptain = false) // Clear previous status
+			captains.forEach((cid, idx) => {
+				const pl = room.players.find(p => p.id === cid)
+				if (pl) {
+					pl.team = idx
+					pl.isCaptain = true
+				}
+			})
+
+			// Decide pick order: for 2 teams do coin toss, for >2 shuffle
+			if (teamCount === 2) {
+				const toss = Math.random() < 0.5 ? 0 : 1
+				room.draftState.currentCaptainIndex = toss
+			} else {
+				// shuffle order of captains
+				const order = room.draftState.captains.slice()
+				for (let i = order.length - 1; i > 0; i--) {
+					const j = Math.floor(Math.random() * (i + 1))
+						;[order[i], order[j]] = [order[j], order[i]]
+				}
+				room.draftState.captainOrder = order
+				room.draftState.currentCaptainIndex = 0
+			}
+
+			// Broadcast captains confirmed and initial teams
+
+			// Notify clients that captains are confirmed and ask captains to ready up for coin flip
+			io.to(roomCode).emit('captains-confirmed', {
+				teams: room.draftState.teams,
+				availablePlayers: room.draftState.availablePlayers,
+				captains: room.draftState.captains,
+				captainNames: room.draftState.captains.map(cid => room.players.find(p => p.id === cid)?.name || ''),
+				ready: room.draftState.ready
+			})
+
+			// Ask captains to press ready for coin flip
+			io.to(roomCode).emit('captain-waiting-ready', { captains: room.draftState.captains })
+			console.log(`Captains set in room ${roomCode}. Starting draft.`)
+		} catch (e) {
+			console.error('Error in admin-set-captains:', e)
+		}
+	})
+
+	// Admin cancels captain selection/draft (host-only)
+	socket.on('admin-cancel-captain-selection', (data) => {
+		const { roomCode } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !isAdmin(room, socket.id)) return
+		try {
+			// Clear any draftState on server
+			if (room.draftState) delete room.draftState
+			// Notify all clients in room to close captain-selection UI
+			io.to(roomCode).emit('captain-selection-cancelled', { roomCode })
+			console.log(`Captain selection cancelled in room ${roomCode} by admin ${socket.id}`)
+		} catch (e) {
+			console.error('Error in admin-cancel-captain-selection:', e)
+		}
+	})
+
+	// Captain picks a player
+	socket.on('captain-picked', (data) => {
+		const { roomCode, playerId } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !room.draftState) return
+		const ds = room.draftState
+
+		// Validate that the picker is the current captain
+		if (socket.id !== ds.captains[ds.currentCaptainIndex]) {
+			console.log(`Pick rejected: ${socket.id} is not current captain ${ds.captains[ds.currentCaptainIndex]}`)
+			return
+		}
+
+		// Verify player exists and is in available list
+		const playerIndex = ds.availablePlayers.findIndex(p => p.id === playerId)
+		if (playerIndex === -1) return
+		const playerObj = ds.availablePlayers[playerIndex]
+
+		// Add player to current captain's team
+		const currentTeamIndex = ds.currentCaptainIndex
+		ds.teams[currentTeamIndex].players.push(playerObj.name)
+		ds.availablePlayers.splice(playerIndex, 1)
+
+		// Update player's team in room
+		const roomPlayer = room.players.find(p => p.id === playerId)
+		if (roomPlayer) roomPlayer.team = currentTeamIndex
+
+		// Check if draft is complete (no players left)
+		if (ds.availablePlayers.length === 0) {
+			io.to(roomCode).emit('captain-selection-complete', { teams: ds.teams })
+			io.to(roomCode).emit('team-updated', { room })
+			room.draftState = null
+			return
+		}
+
+		// Alternate to the other captain for next pick
+		ds.currentCaptainIndex = ds.currentCaptainIndex === 0 ? 1 : 0
+
+		// If only one player remains
+		if (ds.availablePlayers.length === 1) {
+			const lastPlayer = ds.availablePlayers[0]
+
+			// Check if initial available count was odd or even
+			// Odd: let last player choose their team
+			// Even: auto-assign to current captain's team
+			if (ds.initialAvailableCount % 2 === 1) {
+				// Odd: First update everyone's view with the picked player
+				io.to(roomCode).emit('captain-picked', {
+					teams: ds.teams,
+					availablePlayers: ds.availablePlayers,
+					currentCaptainId: null, // No captain picking now
+					currentCaptainName: null
+				})
+
+				// Then emit last player choice
+				io.to(roomCode).emit('last-player-choice', {
+					playerId: lastPlayer.id,
+					playerName: lastPlayer.name,
+					teams: ds.teams,
+					availablePlayers: ds.availablePlayers
+				})
+				return
+			} else {
+				// Even: auto-assign to current captain
+				ds.teams[ds.currentCaptainIndex].players.push(lastPlayer.name)
+				const roomPlayer = room.players.find(p => p.id === lastPlayer.id)
+				if (roomPlayer) roomPlayer.team = ds.currentCaptainIndex
+				ds.availablePlayers = []
+
+				// Draft complete
+				io.to(roomCode).emit('captain-selection-complete', { teams: ds.teams })
+				io.to(roomCode).emit('team-updated', { room })
+				room.draftState = null
+				return
+			}
+		}
+
+		// Continue with next captain's turn
+		io.to(roomCode).emit('captain-picked', {
+			teams: ds.teams,
+			availablePlayers: ds.availablePlayers,
+			currentCaptainId: ds.captains[ds.currentCaptainIndex],
+			currentCaptainName: room.players.find(p => p.id === ds.captains[ds.currentCaptainIndex])?.name
+		})
+	})
+
+	// Captain ready for coin flip
+	socket.on('captain-ready', (data) => {
+		const { roomCode, ready } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !room.draftState) return
+		const ds = room.draftState
+		if (!ds.captains || !ds.captains.includes(socket.id)) return
+		// set or toggle ready state
+		if (typeof ready === 'boolean') {
+			ds.ready[socket.id] = !!ready
+		} else {
+			ds.ready[socket.id] = !ds.ready[socket.id]
+		}
+		// notify room of updated ready state
+		io.to(roomCode).emit('captain-ready-update', { ready: ds.ready })
+		// check if all captains are ready
+		const allReady = ds.captains.every(cid => ds.ready[cid])
+		if (!allReady) return
+		// perform coin flip: 0 => blue (team 0), 1 => red (team 1)
+		const flip = Math.random() < 0.5 ? 0 : 1
+		// emit coin-flip (for animation) then result
+		io.to(roomCode).emit('coin-flip', { result: flip })
+		setTimeout(() => {
+			// set current captain index to winner (team index)
+			ds.currentCaptainIndex = flip
+			io.to(roomCode).emit('coin-result', { winningTeamIndex: flip, currentCaptainId: ds.captains[ds.currentCaptainIndex], currentCaptainName: room.players.find(p => p.id === ds.captains[ds.currentCaptainIndex])?.name })
+			// DON'T auto-advance to picking - let the user click "Continue to Team Selection"
+			// clear ready flags so UI resets for potential future rounds
+			ds.ready = {}
+		}, 4500) // Increased to 4500ms to match the new 4.5s coin animation duration
+	})
+
+	// Start captain picking phase (triggered by user clicking "Continue to Team Selection")
+	socket.on('start-captain-picking', (data) => {
+		const { roomCode } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !room.draftState) return
+		const ds = room.draftState
+		// Emit the captain-pick-turn event to start the picking phase
+		io.to(roomCode).emit('captain-pick-turn', {
+			teams: ds.teams,
+			availablePlayers: ds.availablePlayers,
+			currentCaptainId: ds.captains[ds.currentCaptainIndex],
+			currentCaptainName: room.players.find(p => p.id === ds.captains[ds.currentCaptainIndex])?.name,
+			coinResult: ds.currentCaptainIndex // Include the coin result so crown shows on winning team
+		})
+	})
+
+	// Last player chooses team when odd count
+	socket.on('last-player-choose', (data) => {
+		const { roomCode, teamIndex } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room || !room.draftState) return
+		const ds = room.draftState
+		const last = ds.availablePlayers[0]
+		if (!last) return
+		// assign
+		const rpl = room.players.find(p => p.id === last.id)
+		if (rpl) rpl.team = teamIndex
+		ds.teams[teamIndex].players.push(last.name)
+		ds.availablePlayers = []
+		// Draft complete - broadcast final teams and update server-side room teams
+		io.to(roomCode).emit('captain-selection-complete', { teams: ds.teams })
+		// Also broadcast team-updated so clients can refresh lobby view
+		io.to(roomCode).emit('team-updated', { room })
+		// clear draft state
+		delete room.draftState
+	})
+
+	// Admin: Add/Remove Third Team
+	socket.on("admin-toggle-third-team", (data) => {
+		const { roomCode, addTeam } = data;
+		const room = gameRooms.get(roomCode);
+
+		console.log(`\n🔧 admin-toggle-third-team received:`);
+		console.log(`  - Room Code: ${roomCode}`);
+		console.log(`  - Add Team: ${addTeam}`);
+		console.log(`  - Admin: ${socket.id}`);
+		console.log(`  - Room exists: ${!!room}`);
+
+		if (room && isAdmin(room, socket.id)) {
+			console.log(`  - Players in room: ${room.players.length}`);
+			console.log(`  - Player names: ${room.players.map(p => p.name).join(', ')}`);
+			console.log(`  - Current teams: ${room.gameState?.teams.length}`);
+
+			// Get all sockets in the room
+			const socketsInRoom = io.sockets.adapter.rooms.get(roomCode);
+			console.log(`  - Sockets in room: ${socketsInRoom ? socketsInRoom.size : 0}`);
+			if (socketsInRoom) {
+				console.log(`  - Socket IDs in room: ${Array.from(socketsInRoom).join(', ')}`);
+			}
+		}
+
+		if (room && isAdmin(room, socket.id) && room.gameState) {
+			const gs = room.gameState;
+
+			if (addTeam && gs.teams.length === 2) {
+				// Add third team
+				gs.teams.push({
+					name: 'Team 3',
+					players: [],
+					score: 0
+				});
+				gs.currentDescriberIndex.push(0);
+				gs.teamCount = 3;
+				room.teamCount = 3; // Update room's teamCount as well
+
+				// Ensure teamStats arrays include new team
+				ensureTeamStats(room);
+
+				// Regenerate word pool for 3 teams
+				const estimatedTurnsPerTeam = gs.maxRounds || 5;
+				const wordsPerTurn = 10;
+				const bonusBuffer = 50;
+				const totalWordsNeeded = (estimatedTurnsPerTeam * 3 * wordsPerTurn) + bonusBuffer;
+				room.gameWordPool = generateGameWordPool(totalWordsNeeded, room.usedWordIndices);
+
+				// Broadcast to all players
+				io.to(roomCode).emit("third-team-added", {
+					gameState: gs,
+					room: room,
+					message: "Team 3 has been added to the game!"
+				});
+				// Also emit game-state-updated for immediate UI sync
+				io.to(roomCode).emit("game-state-updated", { gameState: gs });
+				console.log(`Third team added in room ${roomCode}, broadcasting to all players`);
+			} else if (!addTeam && gs.teams.length === 3) {
+				// Remove third team - randomly shuffle players to Team 1 and Team 2
+				const team3Players = gs.teams[2].players;
+
+				// Shuffle team3Players randomly between team 1 and team 2
+				team3Players.forEach((playerName, index) => {
+					const targetTeam = index % 2; // Alternate between 0 and 1
+					gs.teams[targetTeam].players.push(playerName);
+
+					// Update player's team in room.players
+					const player = room.players.find(p => p.name === playerName);
+					if (player) {
+						player.team = targetTeam;
+					}
+				});
+
+				gs.teams.splice(2, 1);
+				gs.currentDescriberIndex.splice(2, 1);
+				gs.teamCount = 2;
+				room.teamCount = 2; // Update room's teamCount as well
+
+				// Resize teamStats arrays down to match 2 teams
+				ensureTeamStats(room);
+
+				// Broadcast to all players
+				io.to(roomCode).emit("third-team-removed", {
+					gameState: gs,
+					removedPlayers: team3Players,
+					room: room,
+					message: `Team 3 has been removed. ${team3Players.length} player(s) redistributed to other teams.`
+				});
+				// Also emit game-state-updated for immediate UI sync
+				io.to(roomCode).emit("game-state-updated", { gameState: gs });
+				console.log(`Third team removed in room ${roomCode}, ${team3Players.length} players redistributed, broadcasting to all players`);
+			}
+		}
+	});
+
+	// Admin: Rename team (host or co-admin)
+	socket.on('rename-team', (data) => {
+		const { roomCode, teamIndex, newName } = data || {};
+		const room = gameRooms.get(roomCode);
+		if (!room) return;
+
+		// Only allow host, co-admin, or team captain (for their own team)
+		const player = room.players.find(p => p.id === socket.id);
+		const isCaptainOfTeam = player && player.isCaptain && Number(player.team) === Number(teamIndex);
+
+		if (!isAdmin(room, socket.id) && !isCaptainOfTeam) {
+			console.log(`Unauthorized rename-team attempt in room ${roomCode} by ${socket.id}`);
+			return;
+		}
+
+		// If gameState exists, update team name there
+		if (room.gameState && Array.isArray(room.gameState.teams) && room.gameState.teams[teamIndex]) {
+			room.gameState.teams[teamIndex].name = (newName || `Team ${teamIndex + 1}`).toString();
+			// Also persist to room.teamNames so lobby retains name after play-again
+			room.teamNames = room.teamNames || [];
+			room.teamNames[teamIndex] = room.gameState.teams[teamIndex].name;
+			// Broadcast updated game state to all clients for immediate sync
+			io.to(roomCode).emit('game-state-updated', { gameState: room.gameState, room });
+			console.log(`Team ${teamIndex} renamed to "${newName}" in room ${roomCode} (game running)`);
+			return;
+		}
+
+		// If no gameState (lobby), emit a lightweight team-name update so clients can update local UI
+		// Persist to room.teamNames so play-again preserves the name
+		room.teamNames = room.teamNames || [];
+		room.teamNames[teamIndex] = (newName || `Team ${teamIndex + 1}`).toString();
+		io.to(roomCode).emit('team-name-updated', { teamIndex, newName, room: { teamStats: room.teamStats, teamNames: room.teamNames } });
+		console.log(`Team ${teamIndex} renamed to "${newName}" in room ${roomCode} (lobby)`);
+	});
+
+	// Chat message handler
+
+	// Note: admin-play-again removed — individual players should use 'player-play-again'
+
+	// Player: Play again individually (move this player to lobby waiting list)
+	socket.on('player-play-again', (data) => {
+		const { roomCode } = data || {}
+		const room = gameRooms.get(roomCode)
+		if (!room) return
+
+		// Find the player in the room
+		const player = room.players.find(p => p.id === socket.id)
+		if (!player) return
+
+		// Remove player from any gameState team lists if gameState exists
+		if (room.gameState && Array.isArray(room.gameState.teams)) {
+			for (const t of room.gameState.teams) {
+				if (Array.isArray(t.players)) {
+					const idx = t.players.indexOf(player.name)
+					if (idx !== -1) t.players.splice(idx, 1)
+				}
+			}
+		}
+
+		// Set player's team to null (waiting list)
+		player.team = null
+		// Mark that this player has opted into the waiting list (visible to others)
+		player.showInWaiting = true
+		// Clear captain status
+		player.isCaptain = false
+
+		// If no one has been assigned as the play-again host yet, assign the first requester
+		if (!room.playAgainHostAssigned) {
+			room.host = socket.id
+			room.playAgainHostAssigned = true
+			console.log(`Assigned new host ${player.name} (${socket.id}) for room ${roomCode} via player-play-again`)
+		}
+
+		// Broadcast updated players/room so all clients see the waiting list change
+		try {
+			io.to(roomCode).emit('player-play-again', { playerId: socket.id, playerName: player.name, room })
+			// Also emit a team-updated so clients refresh waiting lists in a consistent place
+			io.to(roomCode).emit('team-updated', { room })
+			// Also emit a game-state update if present to keep UI in sync
+			if (room.gameState) io.to(roomCode).emit('game-state-updated', { gameState: room.gameState, room })
+			console.log(`Player ${player.name} (${socket.id}) moved to lobby waiting in room ${roomCode}`)
+		} catch (err) {
+			console.error('Error broadcasting player-play-again:', err)
+		}
+	})
+
 	socket.on("chat-message", (data) => {
 		const { roomCode, message, playerName } = data;
 		io.to(roomCode).emit("chat-message-received", {
@@ -1009,126 +3448,151 @@ io.on("connection", (socket) => {
 	socket.on("disconnect", () => {
 		console.log("User disconnected:", socket.id);
 
-		// Remove player from all rooms
+		// Find the room and player
 		gameRooms.forEach((room, roomCode) => {
 			const playerIndex = room.players.findIndex((p) => p.id === socket.id);
 			if (playerIndex !== -1) {
-				const wasHost = room.host === socket.id;
 				const disconnectedPlayer = room.players[playerIndex];
-				room.players.splice(playerIndex, 1);
+				const wasHost = room.host === socket.id;
 
-				// If host left, assign a new host from remaining players
-				if (wasHost && room.players.length > 0) {
-					room.host = room.players[0].id;
-					console.log(
-						`New host assigned in room ${roomCode}: ${room.players[0].name}`
-					);
-					io.to(roomCode).emit("host-changed", {
-						newHost: room.players[0].name,
-						hostId: room.players[0].id,
-						room,
-					});
+				// Initialize disconnectedPlayers map if needed
+				if (!room.disconnectedPlayers) {
+					room.disconnectedPlayers = new Map();
 				}
 
-				if (room.players.length === 0) {
-					// If room is empty, delete it
-					gameRooms.delete(roomCode);
-					console.log(`Room ${roomCode} deleted (empty)`);
-				} else {
-					// Remove player from teams if game has started
-					if (room.gameState) {
-						let describerLeft = false;
-						const currentTeamIndex = room.gameState.currentTeamIndex;
+				// Set up grace period - don't remove immediately, wait 30 seconds
+				const GRACE_PERIOD_MS = 30000; // 30 seconds to reconnect
 
-						room.gameState.teams.forEach((team, teamIndex) => {
-							const teamPlayerIndex = team.players.indexOf(
-								disconnectedPlayer.name
-							);
-							if (teamPlayerIndex !== -1) {
-								// Check if the disconnecting player is the current describer
-								if (
-									teamIndex === currentTeamIndex &&
-									room.gameState.currentDescriberIndex[teamIndex] ===
-										teamPlayerIndex
-								) {
-									describerLeft = true;
-								}
+				console.log(`Player ${disconnectedPlayer.name} disconnected from room ${roomCode}. Starting ${GRACE_PERIOD_MS / 1000}s grace period...`);
 
-								team.players.splice(teamPlayerIndex, 1);
+				// Store disconnect info for potential reconnection
+				const disconnectTimer = setTimeout(() => {
+					// Grace period expired - now actually remove the player
+					console.log(`Grace period expired for ${disconnectedPlayer.name} in room ${roomCode}`);
 
-								// Adjust describer index if a player before or at the describer position left
-								if (
-									room.gameState.currentDescriberIndex[teamIndex] !== undefined
-								) {
-									if (
-										teamPlayerIndex <=
-										room.gameState.currentDescriberIndex[teamIndex]
-									) {
-										room.gameState.currentDescriberIndex[teamIndex] = Math.max(
-											0,
-											room.gameState.currentDescriberIndex[teamIndex] - 1
-										);
-									}
-									// Ensure describer index is within bounds
-									if (
-										team.players.length > 0 &&
-										room.gameState.currentDescriberIndex[teamIndex] >=
-											team.players.length
-									) {
-										room.gameState.currentDescriberIndex[teamIndex] = 0;
-									}
-								}
-							}
+					const currentPlayerIndex = room.players.findIndex((p) => p.name === disconnectedPlayer.name);
+					if (currentPlayerIndex === -1) {
+						// Player already removed or reconnected with different socket
+						room.disconnectedPlayers.delete(disconnectedPlayer.name);
+						return;
+					}
+
+					// Check if player has reconnected (socket ID changed)
+					const currentPlayer = room.players[currentPlayerIndex];
+					if (currentPlayer.id !== socket.id) {
+						// Player reconnected with new socket, don't remove
+						room.disconnectedPlayers.delete(disconnectedPlayer.name);
+						console.log(`Player ${disconnectedPlayer.name} has reconnected, not removing`);
+						return;
+					}
+
+					// Actually remove the player now
+					room.players.splice(currentPlayerIndex, 1);
+					room.disconnectedPlayers.delete(disconnectedPlayer.name);
+
+					// If host left, assign a new host from remaining players
+					if (wasHost && room.players.length > 0) {
+						room.host = room.players[0].id;
+						console.log(`New host assigned in room ${roomCode}: ${room.players[0].name}`);
+						io.to(roomCode).emit("host-changed", {
+							newHost: room.players[0].name,
+							hostId: room.players[0].id,
+							room,
 						});
+					}
 
-						// Check if any team is now empty
-						const team0Empty = room.gameState.teams[0].players.length === 0;
-						const team1Empty = room.gameState.teams[1].players.length === 0;
+					if (room.players.length === 0) {
+						// If room is empty, delete it
+						gameRooms.delete(roomCode);
+						console.log(`Room ${roomCode} deleted (empty)`);
+					} else {
+						// Remove player from teams if game has started
+						if (room.gameState) {
+							let describerLeft = false;
+							const currentTeamIndex = room.gameState.currentTeamIndex;
 
-						// If current team is empty, move to next team
-						if (
-							room.gameState.teams[currentTeamIndex].players.length === 0 &&
-							room.gameState.gameStarted
-						) {
+							room.gameState.teams.forEach((team, teamIndex) => {
+								const teamPlayerIndex = team.players.indexOf(disconnectedPlayer.name);
+								if (teamPlayerIndex !== -1) {
+									// Check if the disconnecting player is the current describer
+									if (
+										teamIndex === currentTeamIndex &&
+										room.gameState.currentDescriberIndex[teamIndex] === teamPlayerIndex
+									) {
+										describerLeft = true;
+									}
+
+									team.players.splice(teamPlayerIndex, 1);
+
+									// Adjust describer index if needed
+									if (room.gameState.currentDescriberIndex[teamIndex] !== undefined) {
+										if (teamPlayerIndex <= room.gameState.currentDescriberIndex[teamIndex]) {
+											room.gameState.currentDescriberIndex[teamIndex] = Math.max(
+												0,
+												room.gameState.currentDescriberIndex[teamIndex] - 1
+											);
+										}
+										// Ensure describer index is within bounds
+										if (
+											team.players.length > 0 &&
+											room.gameState.currentDescriberIndex[teamIndex] >= team.players.length
+										) {
+											room.gameState.currentDescriberIndex[teamIndex] = 0;
+										}
+									}
+								}
+							});
+
+							// Check if any team is now empty
+							const team0Empty = room.gameState.teams[0].players.length === 0;
+							const team1Empty = room.gameState.teams[1].players.length === 0;
+
 							// If both teams are empty, end the game
 							if (team0Empty && team1Empty) {
-								io.to(roomCode).emit("game-over", {
-									gameState: room.gameState,
-									message: "All players left. Game ended.",
+								// Both teams empty from disconnect - send feedback before ending
+								handleRoomClosure(room, roomCode, "All players disconnected").then(() => {
+									// Update stats and emit game-over with room metadata
+									updateStatsOnGameEnd(room);
+									io.to(roomCode).emit("game-over", {
+										gameState: room.gameState,
+										message: "All players left. Game ended.",
+										room,
+									});
+									// Preserve player.team assignments; just mark game state cleared
+									room.gameState = null;
+									room.started = false;
 								});
-								room.gameState = null;
-								room.started = false;
-							} else {
-								// Move to the next team that has players
-								const otherTeamIndex = currentTeamIndex === 0 ? 1 : 0;
-								if (room.gameState.teams[otherTeamIndex].players.length > 0) {
-									io.to(roomCode).emit("team-empty-skip", {
-										message: `${room.gameState.teams[currentTeamIndex].name} has no players left. Continuing with ${room.gameState.teams[otherTeamIndex].name}.`,
+							}
+
+							// If describer left during active turn, notify players
+							if (describerLeft && room.gameState?.gameStarted) {
+								const team = room.gameState.teams[currentTeamIndex];
+								if (team.players.length > 0) {
+									io.to(roomCode).emit("describer-left", {
+										message: "Describer disconnected. Moving to next teammate.",
 										gameState: room.gameState,
 									});
 								}
 							}
 						}
 
-						// If describer left during active turn, notify players
-						if (describerLeft && room.gameState.gameStarted) {
-							const team = room.gameState.teams[currentTeamIndex];
-							if (team.players.length > 0) {
-								io.to(roomCode).emit("describer-left", {
-									message: "Describer disconnected. Moving to next teammate.",
-									gameState: room.gameState,
-								});
-							}
-						}
+						// Notify remaining players that someone left
+						io.to(roomCode).emit("player-left", {
+							socketId: socket.id,
+							playerName: disconnectedPlayer.name,
+							room,
+							gameState: room.gameState,
+						});
 					}
-					// Regular player left, notify others
-					io.to(roomCode).emit("player-left", {
-						socketId: socket.id,
-						playerName: disconnectedPlayer.name,
-						room,
-						gameState: room.gameState, // Send updated game state
-					});
-				}
+				}, GRACE_PERIOD_MS);
+
+				// Store the timer so we can cancel it if player reconnects
+				room.disconnectedPlayers.set(disconnectedPlayer.name, {
+					timer: disconnectTimer,
+					socketId: socket.id,
+					wasHost,
+					disconnectedAt: Date.now(),
+				});
 			}
 		});
 	});

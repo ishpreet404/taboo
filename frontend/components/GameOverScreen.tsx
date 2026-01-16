@@ -1,19 +1,50 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Home, Medal, Star, Trophy } from 'lucide-react'
+import { AlertTriangle, Heart, Home, Medal, RotateCw, Star, Trophy } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { useGame } from './GameContext'
 
+interface PlayerContribution {
+  name: string
+  points: number
+  guessedWords?: string[]
+  describedWords?: string[]
+  tabooWords?: { word: string; points: number }[]
+  words?: string[]
+}
+
 export default function GameOverScreen() {
-  const { gameState, setCurrentScreen } = useGame()
+  const { gameState, setCurrentScreen, leaveGame, socket, roomCode, isAdmin, playAgainProcessing, setNotification, localPlayerPlayAgain } = useGame()
+  const router = useRouter()
 
-  const team1 = gameState.teams[0]
-  const team2 = gameState.teams[1]
-  const winner = team1.score > team2.score ? team1 : team2.score > team1.score ? team2 : null
+  // Get taboo deductions per team
+  const tabooDeductionsByTeam = gameState.confirmedTaboosByTeam || {}
 
-  // Get top contributors
-  const contributions = Object.entries(gameState.playerContributions)
-    .map(([name, data]) => ({ name, ...data }))
+  // Debug logging
+  console.log('[GAME-OVER] gameState.confirmedTaboosByTeam:', gameState.confirmedTaboosByTeam)
+  console.log('[GAME-OVER] tabooDeductionsByTeam:', tabooDeductionsByTeam)
+
+  // Calculate effective scores (original - taboo deductions)
+  const teamsWithEffectiveScores = gameState.teams.map((team, index) => {
+    const tabooDeduction = tabooDeductionsByTeam[index] || 0
+    console.log(`[GAME-OVER] Team ${index} (${team.name}): score=${team.score}, tabooDeduction=${tabooDeduction}`)
+    return {
+      ...team,
+      originalIndex: index,
+      tabooDeduction: tabooDeduction,
+      effectiveScore: team.score - tabooDeduction
+    }
+  })
+
+  // Find winner by comparing effective scores
+  const sortedTeams = [...teamsWithEffectiveScores].sort((a, b) => b.effectiveScore - a.effectiveScore);
+  const winner = sortedTeams[0].effectiveScore > sortedTeams[1].effectiveScore ? sortedTeams[0] : null;
+  const winnerIndex = winner ? winner.originalIndex : null;
+
+  // Get all contributors sorted by points
+  const contributions: PlayerContribution[] = Object.entries(gameState.playerContributions)
+    .map(([name, data]: [string, any]) => ({ name, ...data }))
     .sort((a, b) => b.points - a.points)
 
   return (
@@ -34,82 +65,95 @@ export default function GameOverScreen() {
             >
               🏆
             </motion.div>
-            <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-yellow-400 to-orange-500 bg-clip-text text-transparent">
+            <h1 className="text-3xl sm:text-5xl font-bold mb-4 bg-gradient-to-r from-yellow-400 to-orange-500 bg-clip-text text-transparent break-words px-4">
               {winner.name} Wins!
             </h1>
-            <p className="text-2xl text-gray-300">{winner.score} Points</p>
+            <p className="text-2xl text-gray-300">{winner.effectiveScore} Points</p>
+            {winner.tabooDeduction > 0 && (
+              <p className="text-sm text-orange-400 mt-1">
+                ({winner.score} - {winner.tabooDeduction} taboo penalty)
+              </p>
+            )}
           </>
         ) : (
           <>
             <motion.div
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
-              className="text-8xl mb-6"
+              className="text-6xl sm:text-8xl mb-6"
             >
               🤝
             </motion.div>
-            <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
+            <h1 className="text-4xl sm:text-5xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
               It's a Tie!
             </h1>
-            <p className="text-2xl text-gray-300">{team1.score} - {team2.score}</p>
+            <p className="text-xl sm:text-2xl text-gray-300 px-4 break-words">
+              {sortedTeams.map(t => t.effectiveScore).join(' - ')}
+            </p>
           </>
         )}
       </motion.div>
 
       {/* Final Scores */}
-      <div className="grid md:grid-cols-2 gap-6 mb-12">
-        <motion.div
-          initial={{ x: -50, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className={`glass-strong rounded-2xl p-8 border-2 ${winner === team1 ? 'border-yellow-500 bg-yellow-500/10' : 'border-blue-500/30'
-            }`}
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold text-blue-400">{team1.name}</h2>
-            {winner === team1 && <Trophy className="w-8 h-8 text-yellow-400" />}
-          </div>
-          <div className="text-5xl font-bold mb-4">{team1.score}</div>
-          <div className="text-sm text-gray-400">points</div>
-          <div className="mt-4 space-y-2">
-            {team1.players.map((player) => (
-              <div key={player} className="glass rounded-lg p-2 flex items-center gap-2">
-                <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-sm font-bold">
-                  {player.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm">{player}</span>
-              </div>
-            ))}
-          </div>
-        </motion.div>
+      <div className={`grid ${gameState.teamCount === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-6 mb-12`}>
+        {teamsWithEffectiveScores.map((team, index) => {
+          const teamColors = ['blue', 'red', 'green'];
+          const teamColorName = teamColors[team.originalIndex];
+          const isWinner = winnerIndex === team.originalIndex;
 
-        <motion.div
-          initial={{ x: 50, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className={`glass-strong rounded-2xl p-8 border-2 ${winner === team2 ? 'border-yellow-500 bg-yellow-500/10' : 'border-red-500/30'
-            }`}
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold text-red-400">{team2.name}</h2>
-            {winner === team2 && <Trophy className="w-8 h-8 text-yellow-400" />}
-          </div>
-          <div className="text-5xl font-bold mb-4">{team2.score}</div>
-          <div className="text-sm text-gray-400">points</div>
-          <div className="mt-4 space-y-2">
-            {team2.players.map((player) => (
-              <div key={player} className="glass rounded-lg p-2 flex items-center gap-2">
-                <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center text-sm font-bold">
-                  {player.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm">{player}</span>
+          return (
+            <motion.div
+              key={team.name}
+              initial={{ x: team.originalIndex % 2 === 0 ? -50 : 50, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              transition={{ delay: 0.2 }}
+              className={`glass-strong rounded-2xl p-4 sm:p-8 border-2 ${isWinner ? 'border-yellow-500 bg-yellow-500/10' : `border-${teamColorName}-500/30`
+                }`}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className={`text-2xl font-bold text-${teamColorName}-400`}>{team.name}</h2>
+                {isWinner && <Trophy className="w-8 h-8 text-yellow-400" />}
               </div>
-            ))}
-          </div>
-        </motion.div>
+
+              {/* Score Display - Always show both raw and final */}
+              <div className="flex items-end gap-3 sm:gap-4 mb-3">
+                <div>
+                  <div className="text-[10px] sm:text-xs text-gray-500 uppercase tracking-wide">Final Score</div>
+                  <div className="text-3xl sm:text-5xl font-bold text-white">{team.effectiveScore}</div>
+                </div>
+                <div className="pb-1">
+                  <div className="text-xs text-gray-500 uppercase tracking-wide">Raw</div>
+                  <div className={`text-2xl font-semibold ${team.tabooDeduction > 0 ? 'text-gray-400' : 'text-gray-300'}`}>
+                    {team.score}
+                  </div>
+                </div>
+              </div>
+
+              {/* Taboo Penalty */}
+              {team.tabooDeduction > 0 ? (
+                <div className="flex items-center gap-2 text-sm bg-orange-500/10 border border-orange-500/30 rounded-lg px-3 py-2 mb-4">
+                  <AlertTriangle className="w-4 h-4 text-orange-400" />
+                  <span className="text-orange-400">Taboo Penalty: -{team.tabooDeduction} pts</span>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500 mb-4">No taboo penalties</div>
+              )}
+              <div className="space-y-2">
+                {team.players.map((player) => (
+                  <div key={player} className="glass rounded-lg p-2 flex items-center gap-2">
+                    <div className={`w-8 h-8 bg-${teamColorName}-500 rounded-full flex items-center justify-center text-sm font-bold`}>
+                      {player.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="text-sm">{player}</span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          );
+        })}
       </div>
 
-      {/* Top Contributors */}
+      {/* All Player Stats */}
       <motion.div
         initial={{ y: 50, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -118,37 +162,57 @@ export default function GameOverScreen() {
       >
         <h2 className="text-2xl font-bold mb-6 flex items-center gap-3">
           <Star className="w-6 h-6 text-yellow-400" />
-          Top Contributors
+          Player Stats
         </h2>
         <div className="space-y-4">
-          {contributions.slice(0, 5).map((player, index) => (
-            <motion.div
-              key={player.name}
-              initial={{ x: -20, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              transition={{ delay: 0.5 + index * 0.1 }}
-              className="glass rounded-xl p-4 flex items-center justify-between"
-            >
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2">
-                  {index === 0 && <Medal className="w-6 h-6 text-yellow-400" />}
-                  {index === 1 && <Medal className="w-6 h-6 text-gray-400" />}
-                  {index === 2 && <Medal className="w-6 h-6 text-orange-600" />}
-                  {index > 2 && <span className="w-6 text-center text-gray-400">#{index + 1}</span>}
-                </div>
-                <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-500 rounded-full flex items-center justify-center text-lg font-bold">
-                  {player.name.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <div className="font-semibold">{player.name}</div>
-                  <div className="text-sm text-gray-400">
-                    {(player.guessedWords?.length || player.words?.length || 0)} guessed | {player.describedWords?.length || 0} described
+          {contributions.map((player, index) => {
+            const tabooCount = player.tabooWords?.length || 0
+            const tabooPoints = player.tabooWords?.reduce((sum, t) => sum + t.points, 0) || 0
+
+            return (
+              <motion.div
+                key={player.name}
+                initial={{ x: -20, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                transition={{ delay: 0.5 + index * 0.05 }}
+                className="glass rounded-xl p-4 flex items-center justify-between"
+              >
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="flex items-center gap-2">
+                    {index === 0 && <Medal className="w-6 h-6 text-yellow-400" />}
+                    {index === 1 && <Medal className="w-6 h-6 text-gray-400" />}
+                    {index === 2 && <Medal className="w-6 h-6 text-orange-600" />}
+                    {index > 2 && <span className="w-6 text-center text-gray-400">#{index + 1}</span>}
+                  </div>
+                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-blue-500 rounded-full flex items-center justify-center text-lg font-bold flex-shrink-0">
+                    {player.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="font-semibold">{player.name}</div>
+                    <div className="text-sm text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
+                      <span className="text-green-400">
+                        {(player.guessedWords?.length || player.words?.length || 0)} guessed
+                      </span>
+                      <span className="text-blue-400">
+                        {player.describedWords?.length || 0} described
+                      </span>
+                      {tabooCount > 0 && (
+                        <span className="text-orange-400">
+                          {tabooCount} taboo{tabooCount !== 1 ? 's' : ''} ({tabooPoints}pts)
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="text-2xl font-bold text-yellow-400">{player.points}</div>
-            </motion.div>
-          ))}
+                <div className="text-2xl font-bold text-yellow-400">{player.points}</div>
+              </motion.div>
+            )
+          })}
+          {contributions.length === 0 && (
+            <div className="text-center text-gray-400 py-8">
+              No player stats available
+            </div>
+          )}
         </div>
       </motion.div>
 
@@ -159,13 +223,94 @@ export default function GameOverScreen() {
         transition={{ delay: 0.6 }}
         className="text-center"
       >
-        <button
-          onClick={() => setCurrentScreen('room')}
-          className="px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform hover:scale-105 flex items-center gap-3 mx-auto"
-        >
-          <Home className="w-6 h-6" />
-          Back to Home
-        </button>
+        <div className="flex items-center justify-center gap-4">
+          {/* Individual Play Again available to all players */}
+          <button
+            onClick={() => {
+              try {
+                socket?.emit('player-play-again', { roomCode })
+                // Optimistically update local UI so the player shows up in the waiting list immediately
+                localPlayerPlayAgain()
+              } catch (e) {
+                console.error('Failed to emit player-play-again', e)
+              }
+            }}
+            className="px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform hover:scale-105 flex items-center gap-3"
+          >
+            <RotateCw className="w-6 h-6" />
+            <span>Play Again</span>
+          </button>
+
+          {/* admin-play-again removed: individual Play Again handles per-player flow and assigns first requester as host */}
+
+          <button
+            onClick={() => {
+              leaveGame()
+            }}
+            className="px-12 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 rounded-xl font-bold text-xl transition-all transform hover:scale-105 flex items-center gap-3"
+          >
+            <Home className="w-6 h-6" />
+            Back to Home
+          </button>
+        </div>
+      </motion.div>
+
+      {/* Support & Community Section */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.8 }}
+        className="mt-16 pt-8 border-t border-white/10"
+      >
+        <div className="flex flex-col md:flex-row items-center justify-between gap-8 md:gap-12 glass-strong rounded-3xl p-6 md:p-8 bg-gradient-to-br from-white/5 to-transparent border border-white/10 shadow-2xl">
+          <div className="flex-1 text-center md:text-left">
+            <h3 className="text-xl font-bold text-white mb-2 flex items-center justify-center md:justify-start gap-2">
+              <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
+              Enjoyed playing?
+            </h3>
+            <p className="text-gray-400 text-sm md:text-base">
+              Join our community or support the developers to keep the game running! ✨
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-6">
+            {/* Discord Link */}
+            <a
+              href="https://discord.gg/hemVkeHYmM"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center group transition-all"
+              title="Join our Discord"
+            >
+              <div className="p-4 bg-indigo-500/10 group-hover:bg-indigo-500/20 rounded-2xl border border-indigo-500/30 transition-all">
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, repeatDelay: 2, ease: "easeInOut" }}
+                >
+                  <img src="https://cdn.jsdelivr.net/npm/simple-icons@v9/icons/discord.svg" alt="Discord" className="w-8 h-8" style={{ filter: 'invert(1)' }} />
+                </motion.div>
+              </div>
+            </a>
+
+            {/* Support Us Button */}
+            <motion.button
+              onClick={() => router.push('/donate')}
+              animate={{
+                scale: [1, 1.05, 1],
+                boxShadow: [
+                  '0 0 15px rgba(236, 72, 153, 0.2)',
+                  '0 0 30px rgba(236, 72, 153, 0.5)',
+                  '0 0 15px rgba(236, 72, 153, 0.2)'
+                ]
+              }}
+              transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
+              className="px-8 py-4 bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-600 hover:to-red-600 rounded-2xl font-bold text-white transition-all transform hover:scale-110 flex items-center gap-3 shadow-xl shadow-pink-500/30"
+            >
+              <Heart className="w-5 h-5 fill-white" />
+              <span>Support Us</span>
+            </motion.button>
+          </div>
+        </div>
       </motion.div>
     </div>
   )
