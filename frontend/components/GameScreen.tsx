@@ -887,8 +887,9 @@ export default function GameScreen() {
   }
 
   const handleSkipDescribing = () => {
-    // Describer can skip their turn before starting
-    if (isMyTurn && gamePhase === 'turn-start') {
+    // Describer can skip their turn. Allow skip as long as this client
+    // is the current describer to avoid requiring a stale/extra click.
+    if (isMyTurn) {
       socket?.emit('skip-turn', { roomCode, playerName })
       // Alert will be shown when server responds with describer-skipped event
     }
@@ -977,8 +978,10 @@ export default function GameScreen() {
   }
 
   const handleChangeTeam = () => {
-    // If this player is the describer and it's turn-end phase, auto-advance to next turn
-    if (isMyTurn && gamePhase === 'turn-end') {
+    // If this player is the describer and the turn is not active (i.e. they've finished
+    // but didn't press "Next"), automatically advance to the next turn when they
+    // change teams. This avoids leaving the game stuck if the describer switches team.
+    if (isMyTurn && !turnActive) {
       handleNextTurnButton()
     }
 
