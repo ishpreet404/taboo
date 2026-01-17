@@ -13,6 +13,7 @@ const supporters = [
   { name: 'Irshadpi77', amount: '₹ 100' },
   { name: 'Sumedh Lodhi', amount: '₹ 100' },
   { name: 'Magga', amount: '₹ 69' },
+  { name: 'Nyx', amount: '₹ 50' },
   { name: 'Shubhxho', amount: '₹ 20' },
   { name: 'Blok', amount: '₹ 6.70' },
   { name: 'Aditya Uniyal', amount: '₹ 2.04' },
