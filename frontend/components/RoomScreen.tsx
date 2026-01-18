@@ -23,14 +23,14 @@ const supporters = [
 ]
 
 // Word pack options for room creation
-const WORD_PACKS = [
+export const WORD_PACKS = [
+  { key: 'standard', name: 'Taboo - Standard', description: 'Easy + Medium + Hard mix', color: 'from-blue-500 to-blue-600' },
+  { key: 'difficult', name: 'Taboo - Difficult', description: 'All difficulties including Insane', color: 'from-purple-500 to-purple-600' },
+  { key: 'intense', name: 'Taboo - Intense', description: 'Hard + Insane only - Max challenge!', color: 'from-pink-500 to-rose-600' },
   { key: 'easy', name: 'Taboo - Easy', description: 'Easy words only (5-12 pts)', color: 'from-green-500 to-green-600' },
   { key: 'medium', name: 'Taboo - Medium', description: 'Medium words only (13-25 pts)', color: 'from-yellow-500 to-yellow-600' },
   { key: 'hard', name: 'Taboo - Hard', description: 'Hard words only (26-40 pts)', color: 'from-orange-500 to-orange-600' },
   { key: 'insane', name: 'Taboo - Insane', description: 'Insane words only (41-60 pts)', color: 'from-red-500 to-red-600' },
-  { key: 'standard', name: 'Taboo - Standard', description: 'Easy + Medium + Hard mix', color: 'from-blue-500 to-blue-600' },
-  { key: 'difficult', name: 'Taboo - Difficult', description: 'All difficulties including Insane', color: 'from-purple-500 to-purple-600' },
-  { key: 'intense', name: 'Taboo - Intense', description: 'Hard + Insane only - Max challenge!', color: 'from-pink-500 to-rose-600' },
 ]
 
 export default function RoomScreen() {

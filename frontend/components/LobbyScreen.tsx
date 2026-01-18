@@ -1,16 +1,18 @@
 'use client'
 
-import { motion } from 'framer-motion'
-import { Check, Copy, Crown, Edit3, Flag, GraduationCap, LogOut, Play, PlayCircle, Shuffle, X } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Book, Check, ChevronDown, Copy, Crown, Edit3, Flag, GraduationCap, LogOut, Play, PlayCircle, Shuffle, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useGame } from './GameContext'
+import { WORD_PACKS } from './RoomScreen'
 
 export default function LobbyScreen() {
-  const { roomCode, players, isHost, isAdmin, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, roomJoiningLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted, gameState, setNotification } = useGame()
+  const { roomCode, players, isHost, isAdmin, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, roomJoiningLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted, gameState, setNotification, selectedWordPack, changeWordPack } = useGame()
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [selectedRounds, setSelectedRounds] = useState<number>(12)
   const [editingTeamIndex, setEditingTeamIndex] = useState<number | null>(null)
   const [editingTeamName, setEditingTeamName] = useState<string>('')
+  const [showWordPackDropdown, setShowWordPackDropdown] = useState(false)
 
   useEffect(() => {
     try {
@@ -393,57 +395,100 @@ export default function LobbyScreen() {
         {/* Host controls: Number of Teams (left) + Randomize (center) + Taboo Features (right) */}
         {isHost && (
           <div className="mt-3 w-full flex justify-center">
-            <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 items-center gap-6 md:gap-8">
-              {/* Left: Number of Teams */}
-              <div className="flex items-center gap-3 min-w-0 justify-self-center md:justify-self-end">
-                <span className="text-sm text-gray-400 whitespace-nowrap">Number of Teams:</span>
-                <div className="flex gap-2">
-                  {(() => {
-                    const activeCount = playAgainDefaulted ? 2 : lobbyTeamCount
-                    return (
-                      <>
-                        <button
-                          onClick={() => handleTeamCountChange(2)}
-                          className={`px-3 py-1 rounded-lg font-semibold transition-all ${activeCount === 2 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'}`}
-                        >
-                          2
-                        </button>
-                        <button
-                          onClick={() => handleTeamCountChange(3)}
-                          className={`px-3 py-1 rounded-lg font-semibold transition-all ${activeCount === 3 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'}`}
-                        >
-                          3
-                        </button>
-                      </>
-                    )
-                  })()}
-                </div>
-                {/* Number of Rounds selector */}
-                <div className="ml-4 flex items-center gap-2">
-                  <span className="text-sm text-gray-400 whitespace-nowrap">Rounds:</span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => isHost && setSelectedRounds(6)}
-                      disabled={!isHost}
-                      className={`px-3 py-1 rounded-lg font-semibold transition-all ${selectedRounds === 6 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'} ${!isHost ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      6
-                    </button>
-                    <button
-                      onClick={() => isHost && setSelectedRounds(12)}
-                      disabled={!isHost}
-                      className={`px-3 py-1 rounded-lg font-semibold transition-all ${selectedRounds === 12 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'} ${!isHost ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      12
-                    </button>
+            {/* Mobile layout: show Taboo features, 2x2 controls, then word pack */}
+            <div className="w-full max-w-4xl md:hidden flex flex-col items-center gap-4">
+              {/* Taboo features (mobile) */}
+              <div className="w-full flex flex-col items-center">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-gray-400 whitespace-nowrap">Taboo Features:</span>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <div className="relative">
+                        <input type="checkbox" checked={tabooReporting} onChange={handleTabooReportingToggle} className="sr-only peer" />
+                        <div className="w-10 h-6 bg-gray-700 rounded-full peer peer-checked:bg-orange-500 transition-colors"></div>
+                        <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
+                      </div>
+                      <span className={`text-sm font-medium ${tabooReporting ? 'text-orange-300' : 'text-gray-500'}`}>
+                        <Flag className="w-4 h-4 inline mr-1 text-orange-300" />
+                        Reporting
+                      </span>
+                    </label>
+
+                    <label className={`flex items-center gap-2 ${tabooReporting ? '' : 'opacity-50'}`}>
+                      <div className="relative">
+                        <input type="checkbox" checked={tabooVoting} onChange={handleTabooVotingToggle} disabled={!tabooReporting} className="sr-only peer" />
+                        <div className={`w-10 h-6 rounded-full transition-colors ${tabooReporting ? 'bg-gray-700 peer-checked:bg-green-500' : 'bg-gray-800'}`}></div>
+                        <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4"></div>
+                      </div>
+                      <span className={`text-sm font-medium ${tabooVoting && tabooReporting ? 'text-green-300' : 'text-gray-500'}`}>
+                        <Check className="w-4 h-4 inline mr-1 text-green-300" />
+                        <X className="w-4 h-4 inline mr-1 text-red-400" />
+                        Voting
+                      </span>
+                    </label>
                   </div>
                 </div>
+
+                <p className="text-xs text-gray-500 mt-2 text-center w-full">
+                  {tabooReporting && tabooVoting
+                    ? 'Reporting + voting enabled — confirmed taboos deduct points.'
+                    : tabooReporting
+                      ? 'Reporting enabled — reported words deduct points.'
+                      : 'Taboo features disabled.'}
+                </p>
               </div>
 
-              {/* Center: Randomize button */}
-              <div className="flex items-center justify-center justify-self-center">
-                {isHost && (
-                  <div className="flex flex-col items-center gap-2 w-full max-w-[200px]">
+              {/* 2x2 layout but Number of Teams + Rounds share the top row */}
+              <div className="w-full grid grid-cols-2 gap-3">
+                <div className="col-span-2 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-gray-400">Number of Teams:</span>
+                    <div className="flex gap-2">
+                      {(() => {
+                        const activeCount = playAgainDefaulted ? 2 : lobbyTeamCount
+                        return (
+                          <>
+                            <button
+                              onClick={() => handleTeamCountChange(2)}
+                              className={`px-3 py-1 rounded-lg font-semibold transition-all ${activeCount === 2 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'}`}
+                            >
+                              2
+                            </button>
+                            <button
+                              onClick={() => handleTeamCountChange(3)}
+                              className={`px-3 py-1 rounded-lg font-semibold transition-all ${activeCount === 3 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'}`}
+                            >
+                              3
+                            </button>
+                          </>
+                        )
+                      })()}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-gray-400">Rounds:</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => isHost && setSelectedRounds(6)}
+                        disabled={!isHost}
+                        className={`px-3 py-1 rounded-lg font-semibold transition-all ${selectedRounds === 6 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'} ${!isHost ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        6
+                      </button>
+                      <button
+                        onClick={() => isHost && setSelectedRounds(12)}
+                        disabled={!isHost}
+                        className={`px-3 py-1 rounded-lg font-semibold transition-all ${selectedRounds === 12 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'} ${!isHost ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        12
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-center w-full">
+                  <div className="w-full max-w-[200px]">
                     <button
                       onClick={handleRandomizeTeams}
                       className="w-full px-4 py-2 glass-strong rounded-lg hover:bg-purple-500/20 transition-colors flex items-center justify-center gap-2 text-purple-400 border border-purple-500/20 whitespace-nowrap text-sm"
@@ -451,7 +496,11 @@ export default function LobbyScreen() {
                       <Shuffle className="w-4 h-4" />
                       <span>Randomize Teams</span>
                     </button>
+                  </div>
+                </div>
 
+                <div className="flex items-center justify-center w-full">
+                  <div className="w-full max-w-[200px]">
                     <button
                       onClick={handleStartCaptainSelection}
                       className="w-full px-4 py-2 glass-strong rounded-lg hover:bg-yellow-500/20 transition-colors flex items-center justify-center gap-2 text-yellow-300 border border-yellow-500/20 whitespace-nowrap text-sm"
@@ -459,6 +508,181 @@ export default function LobbyScreen() {
                       <Crown className="w-4 h-4" />
                       <span>Team Division</span>
                     </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Word pack selector (mobile) */}
+              <div className="w-full flex items-center justify-center">
+                <div className="flex flex-col items-center gap-3 w-full max-w-md">
+                  <span className="text-xs uppercase tracking-widest text-gray-500 font-bold">Selected Word Pack</span>
+                  <div className="relative w-full">
+                    <button
+                      onClick={() => setShowWordPackDropdown(!showWordPackDropdown)}
+                      className={`w-full px-4 py-2 glass-strong rounded-lg border border-white/10 hover:border-white/20 transition-all shadow-xl flex items-center justify-between gap-2 text-sm text-left group`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} shadow-[0_0_10px_rgba(59,130,246,0.5)]`} />
+                        <span className="font-bold">
+                          {WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Select Pack'}
+                        </span>
+                      </div>
+                      <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform duration-300 ${showWordPackDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    <AnimatePresence>
+                      {showWordPackDropdown && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                          animate={{ opacity: 1, y: 5, scale: 1 }}
+                          exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                          className="absolute z-50 left-0 right-0 bg-black/70 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden shadow-2xl max-h-[40vh] overflow-y-auto text-white"
+                        >
+                          {WORD_PACKS.map((pack) => (
+                            <button
+                              key={pack.key}
+                              onClick={() => {
+                                changeWordPack(pack.key)
+                                setShowWordPackDropdown(false)
+                              }}
+                              className={`w-full p-4 text-left hover:bg-white/5 transition-colors flex flex-col gap-1 border-b border-white/5 last:border-0 ${selectedWordPack === pack.key ? 'bg-white/5' : ''}`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className={`text-sm font-bold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent`}>
+                                  {pack.name}
+                                </span>
+                                {selectedWordPack === pack.key && (
+                                  <Check className="w-4 h-4 text-green-500" />
+                                )}
+                              </div>
+                              <span className="text-xs text-gray-400 leading-tight">{pack.description}</span>
+                            </button>
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                  <p className="text-xs text-gray-500 italic max-w-md text-center px-4 truncate whitespace-nowrap">
+                    {WORD_PACKS.find(p => p.key === selectedWordPack)?.description}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="w-full max-w-4xl hidden md:grid grid-cols-1 md:grid-cols-3 items-center gap-6 md:gap-8">
+              {/* Left: Number of Teams */}
+              <div className="flex flex-col items-center md:items-end gap-3 min-w-0 justify-self-center md:justify-self-end">
+                <div className="flex items-center gap-3 min-w-0 md:mt-6">
+                  <span className="text-sm text-gray-400 whitespace-nowrap">Number of Teams:</span>
+                  <div className="flex gap-2">
+                    {(() => {
+                      const activeCount = playAgainDefaulted ? 2 : lobbyTeamCount
+                      return (
+                        <>
+                          <button
+                            onClick={() => handleTeamCountChange(2)}
+                            className={`px-3 py-1 rounded-lg font-semibold transition-all ${activeCount === 2 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'}`}
+                          >
+                            2
+                          </button>
+                          <button
+                            onClick={() => handleTeamCountChange(3)}
+                            className={`px-3 py-1 rounded-lg font-semibold transition-all ${activeCount === 3 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'}`}
+                          >
+                            3
+                          </button>
+                        </>
+                      )
+                    })()}
+                  </div>
+                  {/* Number of Rounds selector */}
+                  <div className="ml-4 flex items-center gap-2">
+                    <span className="text-sm text-gray-400 whitespace-nowrap">Rounds:</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => isHost && setSelectedRounds(6)}
+                        disabled={!isHost}
+                        className={`px-3 py-1 rounded-lg font-semibold transition-all ${selectedRounds === 6 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'} ${!isHost ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        6
+                      </button>
+                      <button
+                        onClick={() => isHost && setSelectedRounds(12)}
+                        disabled={!isHost}
+                        className={`px-3 py-1 rounded-lg font-semibold transition-all ${selectedRounds === 12 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'} ${!isHost ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        12
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Randomize Teams button moved under Teams/Rounds */}
+                <div className="w-full max-w-[200px] mx-auto mt-4 md:mt-6">
+                  <button
+                    onClick={handleRandomizeTeams}
+                    className="w-full px-4 py-2 glass-strong rounded-lg hover:bg-purple-500/20 transition-colors flex items-center justify-center gap-2 text-purple-400 border border-purple-500/20 whitespace-nowrap text-sm"
+                  >
+                    <Shuffle className="w-4 h-4" />
+                    <span>Randomize Teams</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Center: Selected Word Pack (moved here) */}
+              <div className="flex items-center justify-center justify-self-center">
+                {isHost && (
+                  <div className="flex flex-col items-center gap-3 w-full max-w-[200px]">
+                    <span className="text-xs uppercase tracking-widest text-gray-500 font-bold">Selected Word Pack</span>
+                    <div className="relative w-full">
+                      <button
+                        onClick={() => setShowWordPackDropdown(!showWordPackDropdown)}
+                        className={`w-full px-4 py-2 glass-strong rounded-lg border border-white/10 hover:border-white/20 transition-all shadow-xl flex items-center justify-between gap-2 text-sm text-left group`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} shadow-[0_0_10px_rgba(59,130,246,0.5)]`} />
+                          <span className="font-bold">
+                            {WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Select Pack'}
+                          </span>
+                        </div>
+                        <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform duration-300 ${showWordPackDropdown ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      <AnimatePresence>
+                        {showWordPackDropdown && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 5, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            className="absolute z-50 left-0 right-0 bg-black/70 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden shadow-2xl max-h-[40vh] overflow-y-auto text-white"
+                          >
+                            {WORD_PACKS.map((pack) => (
+                              <button
+                                key={pack.key}
+                                onClick={() => {
+                                  changeWordPack(pack.key)
+                                  setShowWordPackDropdown(false)
+                                }}
+                                className={`w-full p-4 text-left hover:bg-white/5 transition-colors flex flex-col gap-1 border-b border-white/5 last:border-0 ${selectedWordPack === pack.key ? 'bg-white/5' : ''}`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className={`text-sm font-bold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent`}>
+                                    {pack.name}
+                                  </span>
+                                  {selectedWordPack === pack.key && (
+                                    <Check className="w-4 h-4 text-green-500" />
+                                  )}
+                                </div>
+                                <span className="text-xs text-gray-400 leading-tight">{pack.description}</span>
+                              </button>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                    <p className="text-xs text-gray-500 italic max-w-md text-center px-4 truncate whitespace-nowrap">
+                      {WORD_PACKS.find(p => p.key === selectedWordPack)?.description}
+                    </p>
                   </div>
                 )}
               </div>
@@ -495,26 +719,50 @@ export default function LobbyScreen() {
                   </div>
                 </div>
 
-                <p className="text-xs text-gray-500 text-center md:text-right max-w-xs mt-1 mx-auto md:mx-0">
+                <p className="text-xs text-gray-500 text-center md:text-right max-w-md mt-1 mx-auto md:mx-0 truncate whitespace-nowrap">
                   {tabooReporting && tabooVoting
-                    ? 'Players can report taboo words, then all vote to confirm. Confirmed taboos deduct points.'
+                    ? 'Reporting + voting enabled — confirmed taboos deduct points.'
                     : tabooReporting
-                      ? 'Players can report taboo words (no voting). Reported words are auto-confirmed and deduct points.'
-                      : 'Taboo features disabled. No reporting or voting.'}
+                      ? 'Reporting enabled — reported words deduct points.'
+                      : 'Taboo features disabled.'}
                 </p>
+
+                {/* Team Division button moved under Taboo toggles */}
+                <div className="w-full mt-4 md:mt-6 max-w-[200px] mx-auto">
+                  <button
+                    onClick={handleStartCaptainSelection}
+                    className="w-full px-4 py-2 glass-strong rounded-lg hover:bg-yellow-500/20 transition-colors flex items-center justify-center gap-2 text-yellow-300 border border-yellow-500/20 whitespace-nowrap text-sm"
+                  >
+                    <Crown className="w-4 h-4" />
+                    <span>Team Division</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         )}
 
         {/* Show settings to non-hosts */}
-        {!isHost && (tabooReporting || tabooVoting) && (
-          <div className="mt-4 flex items-center justify-center gap-3 text-sm text-gray-400">
-            <span>Features:</span>
-            {tabooReporting && <span className="px-2 py-1 bg-orange-500/20 text-orange-300 rounded text-xs flex items-center gap-1"><Flag className="w-3 h-3" /> Reporting</span>}
-            {tabooVoting && <span className="px-2 py-1 bg-green-500/20 text-green-300 rounded text-xs flex items-center gap-1"><Check className="w-3 h-3 text-green-300" /><X className="w-3 h-3 text-red-400" /> Voting</span>}
+        {!isHost && (
+          <div className="mt-4 flex flex-col items-center justify-center gap-2 text-sm text-gray-400">
+            <div className="flex items-center gap-2">
+              <span>Word Pack:</span>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} text-white shadow-lg`}>
+                {WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Standard'}
+              </span>
+            </div>
+
+            {(tabooReporting || tabooVoting) && (
+              <div className="flex items-center gap-3">
+                <span>Features:</span>
+                {tabooReporting && <span className="px-2 py-1 bg-orange-500/20 text-orange-300 rounded text-xs flex items-center gap-1"><Flag className="w-3 h-3" /> Reporting</span>}
+                {tabooVoting && <span className="px-2 py-1 bg-green-500/20 text-green-300 rounded text-xs flex items-center gap-1"><Check className="w-3 h-3 text-green-300" /><X className="w-3 h-3 text-red-400" /> Voting</span>}
+              </div>
+            )}
           </div>
         )}
+
+        {/* (duplicate host word pack removed) */}
       </motion.div>
 
       {/* Start Game Button (moved above teams) */}

@@ -97,6 +97,8 @@ interface GameContextType {
   gamesPlayed: number
   playAgainDefaulted: boolean
   localPlayerPlayAgain: () => void
+  selectedWordPack: string
+  changeWordPack: (pack: string) => void
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined)
@@ -142,6 +144,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [playAgainProcessing, setPlayAgainProcessing] = useState(false)
   const [gamesPlayed, setGamesPlayed] = useState<number>(0)
   const [playAgainDefaulted, setPlayAgainDefaulted] = useState(false)
+  const [selectedWordPack, setSelectedWordPack] = useState('standard')
   const [teamStats, setTeamStats] = useState<{ wins: number[]; ties: number[]; losses: number[]; streaks: number[] }>({ wins: [0, 0], ties: [0, 0], losses: [0, 0], streaks: [0, 0] })
   const [gameState, setGameState] = useState<GameState>({
     teams: [
@@ -392,6 +395,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       } as any))
       // Set games played counter
       if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
+      // Set word pack
+      if (data.room?.wordPack) setSelectedWordPack(data.room.wordPack)
       // Set team stats
       if (data.room?.teamStats) setTeamStats(data.room.teamStats)
       // Set room joining lock state if provided
@@ -431,6 +436,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data.tabooVoting !== undefined) {
         setTabooVoting(data.tabooVoting)
       }
+      // Set word pack
+      if (data.room?.wordPack) setSelectedWordPack(data.room.wordPack)
       // Find this player's team assignment
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
@@ -482,6 +489,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data.tabooVoting !== undefined) {
         setTabooVoting(data.tabooVoting)
       }
+      // Set word pack
+      if (data.room?.wordPack) setSelectedWordPack(data.room.wordPack)
       setCurrentScreen('game')
       setNotification({ message: 'Reconnected to game!', type: 'success' })
       setTimeout(() => setNotification(null), 3000)
@@ -523,6 +532,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
       console.log('taboo-settings-changed received:', data)
       setTabooReporting(data.tabooReporting)
       setTabooVoting(data.tabooVoting)
+    })
+
+    newSocket.on('word-pack-changed', (data) => {
+      console.log('word-pack-changed received:', data)
+      setSelectedWordPack(data.wordPack)
     })
 
     newSocket.on('player-joined-midgame', (data) => {
@@ -1080,6 +1094,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // Function to change word pack (host only)
+  const changeWordPack = (pack: string) => {
+    if (socket && roomCode && isAdmin) {
+      socket.emit('change-word-pack', { roomCode, wordPack: pack })
+    }
+  }
+
   // Optimistic local update for an individual Play Again action
   const localPlayerPlayAgain = () => {
     try {
@@ -1129,7 +1150,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
         gamesPlayed,
         playAgainDefaulted,
         localPlayerPlayAgain,
-        teamStats
+        teamStats,
+        selectedWordPack,
+        changeWordPack
       }}
     >
       {children}

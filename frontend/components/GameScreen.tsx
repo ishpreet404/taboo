@@ -3,9 +3,10 @@
 import { Clock, Copy, Edit3, GraduationCap, Handshake, Info, Lock, LogOut, MessageSquare, RefreshCw, Settings, Shield, Shuffle, SkipForward, Trophy as TrophyIcon, Unlock, UserCheck, Users, UserX, X, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
+import { WORD_PACKS } from './RoomScreen'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, roomJoiningLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats, players } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, roomJoiningLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats, players, selectedWordPack } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
@@ -1825,6 +1826,12 @@ export default function GameScreen() {
           {
             gamePhase === 'turn-start' && (
               <div className="glass-strong rounded-xl sm:rounded-2xl p-4 sm:p-6 md:p-8 text-center border border-white/10">
+                <div className="flex items-center justify-center mb-2">
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} text-white shadow-lg`}>
+                    {WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Standard'}
+                  </span>
+                </div>
+
                 <div className={`text-3xl sm:text-4xl md:text-6xl mb-3 sm:mb-4 font-extrabold px-2 break-words ${gameState.currentTeamIndex === 0 ? 'text-blue-400' :
                   gameState.currentTeamIndex === 1 ? 'text-red-400' :
                     'text-green-400'
@@ -1851,7 +1858,7 @@ export default function GameScreen() {
                     </button>
                     <button
                       onClick={handleSkipDescribing}
-                      className="w-full sm:w-auto px-5 sm:px-6 md:px-8 py-3 md:py-4 glass-strong hover:bg-white/5 rounded-lg sm:rounded-xl font-semibold text-sm sm:text-base md:text-lg transition-colors border border-white/10"
+                      className="w-full sm:w-auto px-6 sm:px-8 md:px-12 py-3 md:py-4 glass-strong hover:bg-white/5 rounded-lg sm:rounded-xl font-bold text-base sm:text-lg md:text-xl transition-colors border border-white/10"
                     >
                       Skip Turn
                     </button>

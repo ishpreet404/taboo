@@ -589,6 +589,60 @@ const wordSet = new Set([
 	...wordsByDifficulty.insane
 ].map(w => (w.word || '').toString().trim().toLowerCase()));
 
+// ========================================
+// SHARED CONSTANTS AND HELPERS
+// ========================================
+
+// Difficulty ordering for consistent sorting (easy first)
+const DIFFICULTY_ORDER = { easy: 0, medium: 1, hard: 2, insane: 3 };
+
+// Sort words by difficulty (easy to hard/insane)
+function sortByDifficulty(words) {
+	return words.sort((a, b) => DIFFICULTY_ORDER[a.difficulty] - DIFFICULTY_ORDER[b.difficulty]);
+}
+
+// Ensure word pools are initialized for the room's word pack
+function ensureWordPoolsReady(room) {
+	const wordPack = room.wordPack || 'standard';
+	if (!room.wordPools || room.wordPools._wordPack !== wordPack) {
+		room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
+	}
+	return {
+		wordPack,
+		packDifficulties: getDifficultiesForPack(wordPack),
+		packDatabase: room.wordPools._packDatabase || getWordDatabaseForPack(wordPack)
+	};
+}
+
+// Pull a word from pool, marking it as used. Returns word object or null.
+function pullWordFromPool(room, difficulty, packDatabase) {
+	if (!room.wordPools[difficulty] || room.wordPools[difficulty].length === 0) {
+		return null;
+	}
+	const wordIndex = popRandomFromArray(room.wordPools[difficulty]);
+	if (wordIndex === null || wordIndex === undefined) {
+		return null;
+	}
+	room.usedWordIndices.add(wordIndex);
+	return packDatabase[wordIndex];
+}
+
+// Pull a word from pool with fallback to other available difficulties
+function pullWordWithFallback(room, preferredDiff, packDifficulties, packDatabase) {
+	// Try preferred difficulty first
+	const word = pullWordFromPool(room, preferredDiff, packDatabase);
+	if (word) return word;
+
+	// Fallback to any available difficulty
+	for (const diff of packDifficulties) {
+		if (diff !== preferredDiff) {
+			const fallbackWord = pullWordFromPool(room, diff, packDatabase);
+			if (fallbackWord) return fallbackWord;
+		}
+	}
+	return null;
+}
+
 // Fisher-Yates shuffle algorithm
 function shuffleArray(array) {
 	const shuffled = [...array];
@@ -649,7 +703,7 @@ function generateFairRoundDistributions(roundCount, teamCount, wordsPerTurn = 10
 
 // Helper function to select words avoiding already used ones (legacy - uses new ratio)
 // Target: 35% easy, 40% medium, 25% hard (for 10 words: 4 easy, 4 medium, 2 hard)
-function selectWords(count, usedWordIndices, ensureHardWords = false) {
+function selectWords(count, usedWordIndices) {
 	// Get indices of words we haven't used yet
 	let availableIndices = wordDatabase
 		.map((_, index) => index)
@@ -661,21 +715,14 @@ function selectWords(count, usedWordIndices, ensureHardWords = false) {
 		availableIndices = wordDatabase.map((_, index) => index);
 	}
 
-	let selectedWords = [];
-	const selectedIndices = [];
+	// Group by difficulty and shuffle
+	const byDifficulty = {
+		easy: shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'easy')),
+		medium: shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'medium')),
+		hard: shuffleArray(availableIndices.filter(i => wordDatabase[i].difficulty === 'hard'))
+	};
 
-	// Use the new distribution: 35% easy, 40% medium, 25% hard
-	const hardWordIndices = shuffleArray(availableIndices.filter(index =>
-		wordDatabase[index].difficulty === 'hard'
-	));
-	const mediumWordIndices = shuffleArray(availableIndices.filter(index =>
-		wordDatabase[index].difficulty === 'medium'
-	));
-	const easyWordIndices = shuffleArray(availableIndices.filter(index =>
-		wordDatabase[index].difficulty === 'easy'
-	));
-
-	// Calculate distribution: 4 easy, 4 medium, 2 hard for 10 words
+	// Calculate distribution
 	const distribution = count === 10
 		? { easy: 4, medium: 4, hard: 2 }
 		: {
@@ -685,33 +732,25 @@ function selectWords(count, usedWordIndices, ensureHardWords = false) {
 		};
 
 	// Select from each difficulty pool
-	const selectedEasy = easyWordIndices.slice(0, Math.min(distribution.easy, easyWordIndices.length));
-	const selectedMedium = mediumWordIndices.slice(0, Math.min(distribution.medium, mediumWordIndices.length));
-	const selectedHard = hardWordIndices.slice(0, Math.min(distribution.hard, hardWordIndices.length));
+	const selectedIndices = [
+		...byDifficulty.easy.slice(0, distribution.easy),
+		...byDifficulty.medium.slice(0, distribution.medium),
+		...byDifficulty.hard.slice(0, distribution.hard)
+	];
 
-	selectedIndices.push(...selectedEasy, ...selectedMedium, ...selectedHard);
-
-	// If we still need more words, fill from remaining available
+	// If we still need more words, fill from remaining
 	if (selectedIndices.length < count) {
-		const remainingIndices = availableIndices.filter(index =>
-			!selectedIndices.includes(index)
-		);
-		const shuffledRemainingIndices = shuffleArray(remainingIndices);
-		const additionalIndices = shuffledRemainingIndices.slice(0, count - selectedIndices.length);
-		selectedIndices.push(...additionalIndices);
+		const remaining = shuffleArray(availableIndices.filter(i => !selectedIndices.includes(i)));
+		selectedIndices.push(...remaining.slice(0, count - selectedIndices.length));
 	}
 
 	// Get word objects and mark as used
-	selectedWords = selectedIndices.map(index => {
+	const words = selectedIndices.map(index => {
 		usedWordIndices.add(index);
 		return wordDatabase[index];
 	});
 
-	// Sort by difficulty for better gameplay (easy to hard)
-	return selectedWords.sort((a, b) => {
-		const difficultyOrder = { easy: 0, medium: 1, hard: 2, insane: 3 };
-		return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
-	});
+	return sortByDifficulty(words);
 }
 
 // WORD DISTRIBUTION SYSTEM
@@ -774,62 +813,34 @@ function popRandomFromArray(arr) {
 
 // Generate paired word batches for both teams to ensure fairness
 // Each team gets a batch with identical difficulty distribution
-// customDistribution: optional { easy, medium, hard, insane } to override dynamic generation
 function generateTeamWordBatches(room, wordsPerBatch, teamCount, customDistribution = null) {
-	const wordPack = room.wordPack || 'standard';
-	const packDifficulties = getDifficultiesForPack(wordPack);
-	const packDatabase = getWordDatabaseForPack(wordPack);
+	const { packDifficulties, packDatabase } = ensureWordPoolsReady(room);
 
-	// Initialize or refresh word pools if needed
-	const needsRefresh = !room.wordPools ||
-		room.wordPools._wordPack !== wordPack ||
-		packDifficulties.some(diff =>
-			!room.wordPools[diff] || room.wordPools[diff].length < wordsPerBatch * teamCount
-		);
-
+	// Check if pools need refresh due to size
+	const needsRefresh = packDifficulties.some(diff =>
+		!room.wordPools[diff] || room.wordPools[diff].length < wordsPerBatch * teamCount
+	);
 	if (needsRefresh) {
-		room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
+		room.wordPools = initializeWordPools(room.usedWordIndices, room.wordPack || 'standard');
 	}
 
-	// Use custom distribution or generate dynamic one based on available difficulties
-	let distribution;
-	if (customDistribution) {
-		distribution = { ...customDistribution };
-	} else {
-		// Generate distribution based on available difficulties in the pack
-		distribution = generatePackDistribution(wordsPerBatch, packDifficulties);
-	}
+	// Use custom distribution or generate based on pack
+	const distribution = customDistribution
+		? { ...customDistribution }
+		: generatePackDistribution(wordsPerBatch, packDifficulties);
 
 	// Generate batches for each team with same distribution (fairness)
 	const teamBatches = [];
 	for (let team = 0; team < teamCount; team++) {
 		const batch = [];
 
-		// Pull words for each difficulty level available in the pack
 		for (const diff of packDifficulties) {
-			const count = distribution[diff] || 0;
-			for (let i = 0; i < count; i++) {
-				if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
-					const wordIndex = popRandomFromArray(room.wordPools[diff]);
-					if (wordIndex !== null && wordIndex !== undefined) {
-						room.usedWordIndices.add(wordIndex);
-						batch.push(packDatabase[wordIndex]);
-					}
-				} else {
-					// Fallback: try to get from another available difficulty if pool is exhausted
-					const fallbackDiff = packDifficulties.find(d => d !== diff && room.wordPools[d]?.length > 0);
-					if (fallbackDiff && room.wordPools[fallbackDiff].length > 0) {
-						const wordIndex = popRandomFromArray(room.wordPools[fallbackDiff]);
-						if (wordIndex !== null && wordIndex !== undefined) {
-							room.usedWordIndices.add(wordIndex);
-							batch.push(packDatabase[wordIndex]);
-						}
-					}
-				}
+			for (let i = 0; i < (distribution[diff] || 0); i++) {
+				const word = pullWordWithFallback(room, diff, packDifficulties, packDatabase);
+				if (word) batch.push(word);
 			}
 		}
 
-		// Shuffle the batch so difficulties aren't always in same order
 		teamBatches.push(shuffleArray(batch));
 	}
 
@@ -944,13 +955,9 @@ function getWordsForTeamTurn(room, teamIndex, count = 10) {
 
 		const words = room.teamWordBatches[teamIndex][roundIndex];
 		room.teamRoundIndex[teamIndex] = roundIndex + 1;
-		room.teamBonusIndex[teamIndex] = 0; // Reset bonus index for new turn
+		room.teamBonusIndex[teamIndex] = 0;
 
-		// Sort by difficulty for gameplay (easy first)
-		return words.slice(0, count).sort((a, b) => {
-			const difficultyOrder = { easy: 0, medium: 1, hard: 2, insane: 3 };
-			return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
-		});
+		return sortByDifficulty(words.slice(0, count));
 	}
 
 	// Fallback: generate new batches if pool exhausted
@@ -974,10 +981,7 @@ function getBonusWordsForTeam(room, teamIndex, count) {
 
 		// If we got enough words, return them sorted
 		if (words.length >= count) {
-			return words.sort((a, b) => {
-				const difficultyOrder = { easy: 0, medium: 1, hard: 2, insane: 3 };
-				return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
-			});
+			return sortByDifficulty(words);
 		}
 
 		// If not enough in current round's pool, get from next round's pool
@@ -988,10 +992,7 @@ function getBonusWordsForTeam(room, teamIndex, count) {
 			words.push(...moreWords);
 		}
 
-		return words.sort((a, b) => {
-			const difficultyOrder = { easy: 0, medium: 1, hard: 2, insane: 3 };
-			return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
-		});
+		return sortByDifficulty(words);
 	}
 
 	// Fallback: generate fresh words with proper distribution
@@ -1000,40 +1001,14 @@ function getBonusWordsForTeam(room, teamIndex, count) {
 
 // Generate bonus words maintaining the difficulty ratio
 function generateBonusWordsWithRatio(room, count) {
-	const words = [];
-	const wordPack = room.wordPack || 'standard';
-	const packDifficulties = getDifficultiesForPack(wordPack);
-
-	// Initialize pools if needed
-	if (!room.wordPools || room.wordPools._wordPack !== wordPack) {
-		room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
-	}
-
-	const packDatabase = room.wordPools._packDatabase || getWordDatabaseForPack(wordPack);
-
-	// Generate distribution based on pack
+	const { packDifficulties, packDatabase } = ensureWordPoolsReady(room);
 	const distribution = generatePackDistribution(count, packDifficulties);
+	const words = [];
 
-	// Pull words from pools
 	for (const diff of packDifficulties) {
-		for (let i = 0; i < distribution[diff]; i++) {
-			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
-				const wordIndex = popRandomFromArray(room.wordPools[diff]);
-				if (wordIndex !== null && wordIndex !== undefined) {
-					room.usedWordIndices.add(wordIndex);
-					words.push(packDatabase[wordIndex]);
-				}
-			} else {
-				// Fallback: try to get from another available difficulty
-				const fallbackDiff = packDifficulties.find(d => d !== diff && room.wordPools[d]?.length > 0);
-				if (fallbackDiff && room.wordPools[fallbackDiff].length > 0) {
-					const wordIndex = popRandomFromArray(room.wordPools[fallbackDiff]);
-					if (wordIndex !== null && wordIndex !== undefined) {
-						room.usedWordIndices.add(wordIndex);
-						words.push(packDatabase[wordIndex]);
-					}
-				}
-			}
+		for (let i = 0; i < (distribution[diff] || 0); i++) {
+			const word = pullWordWithFallback(room, diff, packDifficulties, packDatabase);
+			if (word) words.push(word);
 		}
 	}
 
@@ -1043,41 +1018,9 @@ function generateBonusWordsWithRatio(room, count) {
 // Get progressive bonus words with specific difficulty targeting
 // difficultyType: 'easy', 'medium', 'hard-mixed'
 function getProgressiveBonusWords(room, count, difficultyType) {
-	const words = [];
-	const wordPack = room.wordPack || 'standard';
-	const packDifficulties = getDifficultiesForPack(wordPack);
+	const { wordPack, packDifficulties, packDatabase } = ensureWordPoolsReady(room);
 
-	// Initialize pools if needed
-	if (!room.wordPools || room.wordPools._wordPack !== wordPack) {
-		room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
-	}
-
-	const packDatabase = room.wordPools._packDatabase || getWordDatabaseForPack(wordPack);
-
-	// Log pool sizes before selection
-	console.log(`[BONUS] Getting ${count} ${difficultyType} words. Pool sizes:`, packDifficulties.map(d => `${d}=${room.wordPools[d]?.length || 0}`).join(', '));
-
-	// Refresh pools if running low on the requested difficulty
-	let needsRefresh = false;
-	if (difficultyType === 'easy' && packDifficulties.includes('easy') && (!room.wordPools.easy || room.wordPools.easy.length < count)) {
-		needsRefresh = true;
-	} else if (difficultyType === 'medium' && packDifficulties.includes('medium') && (!room.wordPools.medium || room.wordPools.medium.length < count)) {
-		needsRefresh = true;
-	} else if (difficultyType === 'hard-mixed') {
-		const hardNeeded = Math.ceil(count * 0.4);
-		const mediumNeeded = count - hardNeeded;
-		if ((packDifficulties.includes('medium') && (!room.wordPools.medium || room.wordPools.medium.length < mediumNeeded)) ||
-			(packDifficulties.includes('hard') && (!room.wordPools.hard || room.wordPools.hard.length < hardNeeded))) {
-			needsRefresh = true;
-		}
-	}
-
-	if (needsRefresh) {
-		console.log(`[BONUS] Refreshing word pools...`);
-		room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
-	}
-
-	// If the pack doesn't support the requested difficulty type, use pack distribution
+	// Determine distribution based on difficulty type
 	let distribution;
 	if (!packDifficulties.includes(difficultyType) && difficultyType !== 'hard-mixed') {
 		distribution = generatePackDistribution(count, packDifficulties);
@@ -1091,115 +1034,45 @@ function getProgressiveBonusWords(room, count, difficultyType) {
 				break;
 			case 'hard-mixed':
 				const hardCount = Math.ceil(count * 0.4);
-				const mediumCount = count - hardCount;
-				distribution = { easy: 0, medium: mediumCount, hard: hardCount, insane: 0 };
+				distribution = { easy: 0, medium: count - hardCount, hard: hardCount, insane: 0 };
 				break;
 			default:
 				distribution = generatePackDistribution(count, packDifficulties);
 		}
 	}
 
-	console.log(`[BONUS] Distribution for ${difficultyType}:`, distribution);
-
-	// Pull words from pools based on distribution
+	// Pull words based on distribution
+	const words = [];
 	for (const diff of packDifficulties) {
 		for (let i = 0; i < (distribution[diff] || 0); i++) {
-			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
-				const wordIndex = popRandomFromArray(room.wordPools[diff]);
-				if (wordIndex !== null && wordIndex !== undefined) {
-					room.usedWordIndices.add(wordIndex);
-					words.push(packDatabase[wordIndex]);
-				}
-			} else {
-				// Fallback: try to get from another available difficulty
-				const fallbackDiff = packDifficulties.find(d => d !== diff && room.wordPools[d]?.length > 0);
-				if (fallbackDiff && room.wordPools[fallbackDiff].length > 0) {
-					const wordIndex = popRandomFromArray(room.wordPools[fallbackDiff]);
-					if (wordIndex !== null && wordIndex !== undefined) {
-						room.usedWordIndices.add(wordIndex);
-						words.push(packDatabase[wordIndex]);
-						console.log(`[BONUS] Fallback: wanted ${diff}, got ${packDatabase[wordIndex].difficulty}`);
-					}
-				}
-			}
+			const word = pullWordWithFallback(room, diff, packDifficulties, packDatabase);
+			if (word) words.push(word);
 		}
 	}
 
-	// Log the result
-	const resultCounts = { easy: 0, medium: 0, hard: 0, insane: 0 };
-	words.forEach(w => resultCounts[w.difficulty]++);
-	console.log(`[BONUS] Selected ${words.length} words:`, resultCounts);
-
-	// Sort by difficulty (easy first for better UX)
-	return words.sort((a, b) => {
-		const difficultyOrder = { easy: 0, medium: 1, hard: 2, insane: 3 };
-		return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
-	});
+	return sortByDifficulty(words);
 }
 
 // Get dynamic bonus words with specific distribution pattern
-// pattern: { easy: number, medium: number, hard: number, count: number }
+// pattern: { easy: number, medium: number, hard: number }
 function getDynamicBonusWords(room, pattern) {
-	const words = [];
-	const wordPack = room.wordPack || 'standard';
-	const packDifficulties = getDifficultiesForPack(wordPack);
+	const { packDifficulties, packDatabase } = ensureWordPoolsReady(room);
 
-	// Initialize pools if needed
-	if (!room.wordPools || room.wordPools._wordPack !== wordPack) {
-		room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
-	}
-
-	const packDatabase = room.wordPools._packDatabase || getWordDatabaseForPack(wordPack);
-
-	// Use pattern distribution only for difficulties available in the pack
+	// Build distribution from pattern for available difficulties only
 	const distribution = { easy: 0, medium: 0, hard: 0, insane: 0 };
 	for (const diff of packDifficulties) {
 		distribution[diff] = pattern[diff] || 0;
 	}
 
-	console.log(`[DYNAMIC BONUS] Pattern:`, Object.entries(distribution).filter(([k, v]) => v > 0).map(([k, v]) => `${k[0]}${v}`).join(' '));
-	console.log(`[DYNAMIC BONUS] Pool sizes:`, packDifficulties.map(d => `${d}=${room.wordPools[d]?.length || 0}`).join(', '));
-
-	// Check if we need to refresh pools
-	const needsRefresh = packDifficulties.some(diff =>
-		distribution[diff] > 0 && (!room.wordPools[diff] || room.wordPools[diff].length < distribution[diff])
-	);
-
-	if (needsRefresh) {
-		console.log(`[DYNAMIC BONUS] Refreshing word pools...`);
-		room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
-	}
-
-	// Pull words from pools based on distribution
+	// Pull words based on distribution
+	const words = [];
 	for (const diff of packDifficulties) {
 		for (let i = 0; i < (distribution[diff] || 0); i++) {
-			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
-				const wordIndex = popRandomFromArray(room.wordPools[diff]);
-				if (wordIndex !== null && wordIndex !== undefined) {
-					room.usedWordIndices.add(wordIndex);
-					words.push(packDatabase[wordIndex]);
-				}
-			} else {
-				// Fallback: try another available difficulty
-				const fallbackDiff = packDifficulties.find(d => d !== diff && room.wordPools[d]?.length > 0);
-				if (fallbackDiff && room.wordPools[fallbackDiff].length > 0) {
-					const wordIndex = popRandomFromArray(room.wordPools[fallbackDiff]);
-					if (wordIndex !== null && wordIndex !== undefined) {
-						room.usedWordIndices.add(wordIndex);
-						words.push(packDatabase[wordIndex]);
-						console.log(`[DYNAMIC BONUS] Fallback: wanted ${diff}, got ${fallbackDiff}`);
-					}
-				}
-			}
+			const word = pullWordWithFallback(room, diff, packDifficulties, packDatabase);
+			if (word) words.push(word);
 		}
 	}
 
-	// Log the result
-	const resultCounts = { easy: 0, medium: 0, hard: 0, insane: 0 };
-	words.forEach(w => resultCounts[w.difficulty]++);
-	console.log(`[DYNAMIC BONUS] Selected ${words.length} words:`, resultCounts);
-
-	// Shuffle the words so they're not in difficulty order (more fun!)
 	return shuffleArray(words);
 }
 
@@ -1633,6 +1506,25 @@ io.on("connection", (socket) => {
 				console.log(`Taboo settings updated in room ${roomCode}: reporting=${tabooReporting}, voting=${tabooVoting}`);
 			} else {
 				console.log(`Unauthorized taboo settings change attempt in room ${roomCode} by socket ${socket.id}`);
+			}
+		}
+	});
+
+	// Change word pack (host or admin)
+	socket.on("change-word-pack", (data) => {
+		const { roomCode, wordPack } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && isAdmin(room, socket.id)) {
+			// Validate if word pack exists
+			if (WORD_PACKS[wordPack]) {
+				room.wordPack = wordPack;
+				// Re-initialize pools for the new pack
+				room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
+
+				// Broadcast change to all players
+				io.to(roomCode).emit("word-pack-changed", { wordPack });
+				console.log(`Word pack changed to ${wordPack} in room ${roomCode}`);
 			}
 		}
 	});
