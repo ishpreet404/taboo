@@ -86,7 +86,7 @@ interface GameContextType {
   setTabooSettings: (reporting: boolean, voting: boolean) => void
   setNotification: (notification: Notification | null) => void
   setPlayerName: (name: string) => void
-  createRoom: (name: string) => void
+  createRoom: (name: string, wordPack?: string) => void
   joinRoom: (code: string, name: string) => void
   joinTeam: (teamIndex: number) => void
   startGame: (teamCount?: number, maxRounds?: number) => void
@@ -987,12 +987,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const createRoom = (name: string) => {
+  const createRoom = (name: string, wordPack: string = 'standard') => {
     // Prepare a fresh local state for the new room to avoid leftover data
     resetLocalRoomState()
     setPlayerName(name)
     localStorage.setItem('taboo_player_name', name)
-    socket?.emit('create-room', { playerName: name, sessionId: localStorage.getItem('taboo_session_id') })
+    socket?.emit('create-room', { playerName: name, sessionId: localStorage.getItem('taboo_session_id'), wordPack })
   }
 
   const joinRoom = (code: string, name: string) => {
