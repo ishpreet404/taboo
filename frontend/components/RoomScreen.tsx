@@ -9,8 +9,8 @@ import { useGame } from './GameContext'
 
 // Supporters data - add new supporters here (include currency symbol in amount)
 const supporters = [
+  { name: 'GraphOverflow', amount: '₹ 600' },
   { name: 'Ansh', amount: '$ 1.50' },
-  { name: 'GraphOverflow', amount: '₹ 100' },
   { name: 'Sumedh Lodhi', amount: '₹ 100' },
   { name: 'Magga', amount: '₹ 69' },
   { name: 'Nyx', amount: '₹ 50' },
