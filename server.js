@@ -557,12 +557,66 @@ const WORD_PACKS = {
 	}
 };
 
+// Add Hindi-specific packs (will pull from custom groups if present in wordDatabase.json)
+WORD_PACKS['hindi_easy'] = {
+	name: 'Taboo - Hindi (Easy)',
+	difficulties: ['hindi_easy'],
+	description: 'Hindi Easy words only (same scoring as English Easy)'
+};
+WORD_PACKS['hindi_medium'] = {
+	name: 'Taboo - Hindi (Medium)',
+	difficulties: ['hindi_medium'],
+	description: 'Hindi Medium words only (same scoring as English Medium)'
+};
+WORD_PACKS['hindi_hard'] = {
+	name: 'Taboo - Hindi (Hard)',
+	difficulties: ['hindi_hard'],
+	description: 'Hindi Hard words only (same scoring as English Hard)'
+};
+WORD_PACKS['hindi'] = {
+	name: 'Taboo - Hindi',
+	difficulties: ['hindi_easy', 'hindi_medium', 'hindi_hard'],
+	description: 'Mix of Hindi Easy + Medium + Hard'
+};
+
 // Build word databases for each pack
 const wordDatabasesByPack = {};
+// Support custom / language-specific groups defined in wordDatabase.json
+// e.g. keys like 'hindi_easy', 'hindi_medium', 'hindi_hard' will be processed
+const customWordGroups = {};
+if (wordDatabaseJSON && wordDatabaseJSON.words) {
+	for (const key of Object.keys(wordDatabaseJSON.words)) {
+		if (['easy', 'medium', 'hard', 'insane'].includes(key)) continue;
+		// Expecting names like '<lang>_<difficulty>' e.g. 'hindi_easy'
+		const m = key.match(/^(.*)_(easy|medium|hard|insane)$/);
+		if (!m) continue;
+		const baseDiff = m[2];
+		const words = wordDatabaseJSON.words[key] || [];
+		customWordGroups[key] = [];
+		const range = wordDatabaseJSON.points && wordDatabaseJSON.points[baseDiff] ? wordDatabaseJSON.points[baseDiff] : { min: 5, max: 50 };
+		for (const w of words) {
+			const adaptive = getAdaptivePoints(w, range.min, range.max, baseDiff);
+			let points = adaptive;
+			if (baseDiff === 'hard' || baseDiff === 'insane') {
+				const hardSmart = getHardWordPoints(w, range.min, range.max);
+				points = Math.max(adaptive, hardSmart);
+			}
+			customWordGroups[key].push({ word: (w || '').toString().toUpperCase(), difficulty: baseDiff, points });
+		}
+		console.log(`Loaded custom word group '${key}': ${customWordGroups[key].length} words`);
+	}
+}
+
 for (const [packKey, packConfig] of Object.entries(WORD_PACKS)) {
 	wordDatabasesByPack[packKey] = [];
 	for (const diff of packConfig.difficulties) {
-		wordDatabasesByPack[packKey].push(...wordsByDifficulty[diff]);
+		if (wordsByDifficulty[diff]) {
+			wordDatabasesByPack[packKey].push(...wordsByDifficulty[diff]);
+		} else if (customWordGroups[diff]) {
+			wordDatabasesByPack[packKey].push(...customWordGroups[diff]);
+		} else {
+			console.warn(`Pack ${packKey} references unknown difficulty/group '${diff}'`);
+		}
 	}
 	console.log(`Word pack '${packKey}' (${packConfig.name}): ${wordDatabasesByPack[packKey].length} words`);
 }
@@ -577,16 +631,28 @@ function getWordDatabaseForPack(packKey) {
 
 // Function to get available difficulties for a pack
 function getDifficultiesForPack(packKey) {
-	const pack = WORD_PACKS[packKey];
-	return pack ? pack.difficulties : ['easy', 'medium', 'hard'];
+	const pack = WORD_PACKS[packKey]
+	if (!pack) return ['easy', 'medium', 'hard']
+
+	// Map custom group names like 'hindi_easy' -> 'easy' so the server's
+	// internal pools (which use base difficulties) populate correctly.
+	const mapped = pack.difficulties.map(d => {
+		const m = d.match(/(?:.+)_(easy|medium|hard|insane)$/)
+		return m ? m[1] : d
+	})
+
+	// remove duplicates while preserving order
+	return [...new Set(mapped)]
 }
 
 // Build a fast lookup Set for existence checks (normalized lowercase) - includes ALL words from all difficulties
+const allCustomWords = Object.values(customWordGroups || {}).flat();
 const wordSet = new Set([
 	...wordsByDifficulty.easy,
 	...wordsByDifficulty.medium,
 	...wordsByDifficulty.hard,
-	...wordsByDifficulty.insane
+	...wordsByDifficulty.insane,
+	...allCustomWords
 ].map(w => (w.word || '').toString().trim().toLowerCase()));
 
 // ========================================
