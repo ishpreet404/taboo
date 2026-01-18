@@ -5,6 +5,16 @@ import { useRouter } from 'next/navigation'
 import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
 
+// Temporarily silence noisy client-side console.log output in the browser.
+// Keeps console.warn and console.error intact for visibility.
+if (typeof window !== 'undefined' && window.console) {
+  try {
+    window.console.log = () => { }
+  } catch (e) {
+    // ignore — best-effort
+  }
+}
+
 interface Player {
   id: string
   name: string

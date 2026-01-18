@@ -698,9 +698,9 @@ export default function LobbyScreen() {
         {lobbyTeamCount === 3 && (
           <motion.div
             key={2}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="glass-strong rounded-2xl p-4 md:p-6 flex flex-col justify-between min-h-[250px] md:min-h-[400px] border-2 border-green-500/30"
+            className="glass-strong rounded-2xl p-4 md:p-6 flex flex-col justify-between min-h-[300px] md:min-h-[400px] border-2 border-green-500/30"
           >
             <div>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">

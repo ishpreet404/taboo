@@ -28,6 +28,16 @@ const io = socketIO(server, {
 app.use(cors());
 app.use(express.static("public"));
 
+// Silence server console output to avoid exposing server logs to clients' consoles.
+// This overrides console methods on the Node server only and can be reverted by
+// removing these lines during debugging.
+if (typeof process !== 'undefined' && process.release && process.release.name === 'node') {
+	console.log = () => { }
+	console.info = () => { }
+	console.warn = () => { }
+	console.error = () => { }
+}
+
 // Game rooms storage
 const gameRooms = new Map();
 
