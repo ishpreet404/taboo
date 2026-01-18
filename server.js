@@ -668,6 +668,13 @@ function initializeWordPools(usedWordIndices) {
 	return pools;
 }
 
+// Remove and return a random element from an array (in-place). Returns null if empty.
+function popRandomFromArray(arr) {
+	if (!arr || arr.length === 0) return null;
+	const idx = Math.floor(Math.random() * arr.length);
+	return arr.splice(idx, 1)[0];
+}
+
 // Generate paired word batches for both teams to ensure fairness
 // Each team gets a batch with identical difficulty distribution
 // customDistribution: optional { easy, medium, hard } to override dynamic generation
@@ -699,16 +706,20 @@ function generateTeamWordBatches(room, wordsPerBatch, teamCount, customDistribut
 			const count = distribution[diff];
 			for (let i = 0; i < count; i++) {
 				if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
-					const wordIndex = room.wordPools[diff].shift();
-					room.usedWordIndices.add(wordIndex);
-					batch.push(wordDatabase[wordIndex]);
+					const wordIndex = popRandomFromArray(room.wordPools[diff]);
+					if (wordIndex !== null && wordIndex !== undefined) {
+						room.usedWordIndices.add(wordIndex);
+						batch.push(wordDatabase[wordIndex]);
+					}
 				} else {
 					// Fallback: try to get from another difficulty if pool is exhausted
 					const fallbackDiff = diff === 'easy' ? 'medium' : (diff === 'medium' ? 'easy' : 'medium');
 					if (room.wordPools[fallbackDiff] && room.wordPools[fallbackDiff].length > 0) {
-						const wordIndex = room.wordPools[fallbackDiff].shift();
-						room.usedWordIndices.add(wordIndex);
-						batch.push(wordDatabase[wordIndex]);
+						const wordIndex = popRandomFromArray(room.wordPools[fallbackDiff]);
+						if (wordIndex !== null && wordIndex !== undefined) {
+							room.usedWordIndices.add(wordIndex);
+							batch.push(wordDatabase[wordIndex]);
+						}
 					}
 				}
 			}
@@ -868,9 +879,11 @@ function generateBonusWordsWithRatio(room, count) {
 	for (const diff of ['easy', 'medium', 'hard']) {
 		for (let i = 0; i < distribution[diff]; i++) {
 			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
-				const wordIndex = room.wordPools[diff].shift();
-				room.usedWordIndices.add(wordIndex);
-				words.push(wordDatabase[wordIndex]);
+				const wordIndex = popRandomFromArray(room.wordPools[diff]);
+				if (wordIndex !== null && wordIndex !== undefined) {
+					room.usedWordIndices.add(wordIndex);
+					words.push(wordDatabase[wordIndex]);
+				}
 			}
 		}
 	}
@@ -944,17 +957,21 @@ function getProgressiveBonusWords(room, count, difficultyType) {
 	for (const diff of ['easy', 'medium', 'hard']) {
 		for (let i = 0; i < distribution[diff]; i++) {
 			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
-				const wordIndex = room.wordPools[diff].shift();
-				room.usedWordIndices.add(wordIndex);
-				words.push(wordDatabase[wordIndex]);
+				const wordIndex = popRandomFromArray(room.wordPools[diff]);
+				if (wordIndex !== null && wordIndex !== undefined) {
+					room.usedWordIndices.add(wordIndex);
+					words.push(wordDatabase[wordIndex]);
+				}
 			} else {
 				// Fallback: try to get from adjacent difficulty
 				const fallbackDiff = diff === 'easy' ? 'medium' : (diff === 'hard' ? 'medium' : 'easy');
 				if (room.wordPools[fallbackDiff] && room.wordPools[fallbackDiff].length > 0) {
-					const wordIndex = room.wordPools[fallbackDiff].shift();
-					room.usedWordIndices.add(wordIndex);
-					words.push(wordDatabase[wordIndex]);
-					console.log(`[BONUS] Fallback: wanted ${diff}, got ${wordDatabase[wordIndex].difficulty}`);
+					const wordIndex = popRandomFromArray(room.wordPools[fallbackDiff]);
+					if (wordIndex !== null && wordIndex !== undefined) {
+						room.usedWordIndices.add(wordIndex);
+						words.push(wordDatabase[wordIndex]);
+						console.log(`[BONUS] Fallback: wanted ${diff}, got ${wordDatabase[wordIndex].difficulty}`);
+					}
 				}
 			}
 		}
@@ -1002,9 +1019,11 @@ function getDynamicBonusWords(room, pattern) {
 	for (const diff of ['easy', 'medium', 'hard']) {
 		for (let i = 0; i < distribution[diff]; i++) {
 			if (room.wordPools[diff] && room.wordPools[diff].length > 0) {
-				const wordIndex = room.wordPools[diff].shift();
-				room.usedWordIndices.add(wordIndex);
-				words.push(wordDatabase[wordIndex]);
+				const wordIndex = popRandomFromArray(room.wordPools[diff]);
+				if (wordIndex !== null && wordIndex !== undefined) {
+					room.usedWordIndices.add(wordIndex);
+					words.push(wordDatabase[wordIndex]);
+				}
 			} else {
 				// Fallback: try adjacent difficulty
 				const fallbacks = diff === 'easy' ? ['medium', 'hard'] :
@@ -1012,10 +1031,12 @@ function getDynamicBonusWords(room, pattern) {
 						['easy', 'hard'];
 				for (const fb of fallbacks) {
 					if (room.wordPools[fb] && room.wordPools[fb].length > 0) {
-						const wordIndex = room.wordPools[fb].shift();
-						room.usedWordIndices.add(wordIndex);
-						words.push(wordDatabase[wordIndex]);
-						console.log(`[DYNAMIC BONUS] Fallback: wanted ${diff}, got ${fb}`);
+						const wordIndex = popRandomFromArray(room.wordPools[fb]);
+						if (wordIndex !== null && wordIndex !== undefined) {
+							room.usedWordIndices.add(wordIndex);
+							words.push(wordDatabase[wordIndex]);
+							console.log(`[DYNAMIC BONUS] Fallback: wanted ${diff}, got ${fb}`);
+						}
 						break;
 					}
 				}
