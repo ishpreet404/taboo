@@ -514,16 +514,16 @@ export default function LobbyScreen() {
 
               {/* Word pack selector (mobile) */}
               <div className="w-full flex items-center justify-center">
-                <div className="flex flex-col items-center gap-3 w-full max-w-md">
+                <div className="flex flex-col items-center gap-3">
                   <span className="text-xs uppercase tracking-widest text-gray-500 font-bold">Selected Word Pack</span>
-                  <div className="relative w-full">
+                  <div className="relative inline-block">
                     <button
                       onClick={() => setShowWordPackDropdown(!showWordPackDropdown)}
-                      className={`w-full px-4 py-2 glass-strong rounded-lg border border-white/10 hover:border-white/20 transition-all shadow-xl flex items-center justify-between gap-2 text-sm text-left group`}
+                      className={`inline-flex px-4 py-2 glass-strong rounded-lg border border-white/10 hover:border-white/20 transition-all shadow-xl items-center justify-between gap-2 text-sm text-left group`}
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} shadow-[0_0_10px_rgba(59,130,246,0.5)]`} />
-                        <span className="font-bold">
+                        <span className="font-bold whitespace-nowrap">
                           {WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Select Pack'}
                         </span>
                       </div>
@@ -632,16 +632,16 @@ export default function LobbyScreen() {
               {/* Center: Selected Word Pack (moved here) */}
               <div className="flex items-center justify-center justify-self-center">
                 {isHost && (
-                  <div className="flex flex-col items-center gap-3 w-full max-w-[200px]">
+                  <div className="flex flex-col items-center gap-3">
                     <span className="text-xs uppercase tracking-widest text-gray-500 font-bold">Selected Word Pack</span>
-                    <div className="relative w-full">
+                    <div className="relative inline-block">
                       <button
                         onClick={() => setShowWordPackDropdown(!showWordPackDropdown)}
-                        className={`w-full px-4 py-2 glass-strong rounded-lg border border-white/10 hover:border-white/20 transition-all shadow-xl flex items-center justify-between gap-2 text-sm text-left group`}
+                        className={`inline-flex px-4 py-2 glass-strong rounded-lg border border-white/10 hover:border-white/20 transition-all shadow-xl items-center justify-between gap-2 text-sm text-left group`}
                       >
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
                           <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} shadow-[0_0_10px_rgba(59,130,246,0.5)]`} />
-                          <span className="font-bold">
+                          <span className="font-bold whitespace-nowrap">
                             {WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Select Pack'}
                           </span>
                         </div>
@@ -747,7 +747,7 @@ export default function LobbyScreen() {
           <div className="mt-4 flex flex-col items-center justify-center gap-2 text-sm text-gray-400">
             <div className="flex items-center gap-2">
               <span>Word Pack:</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} text-white shadow-lg`}>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} text-white shadow-lg inline-block whitespace-nowrap`}>
                 {WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Standard'}
               </span>
             </div>
