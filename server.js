@@ -393,6 +393,63 @@ function getHardWordPoints(word, min, max) {
 	return Math.min(max, Math.max(min, score));
 }
 
+// Adaptive scoring for easy and medium words based on length/complexity
+function getAdaptivePoints(word, min, max, difficulty) {
+	const lower = (word || '').toLowerCase();
+
+	// Normalize: remove punctuation but keep spaces (multi-word phrases are often easier)
+	const normalized = lower.replace(/["'.,!?():;\/\\\[\]_]/g, '');
+	const lettersOnly = normalized.replace(/\s+/g, '').replace(/[^a-z]/g, '');
+	const len = Math.max(0, lettersOnly.length);
+
+	// crude syllable estimate: count vowel groups
+	const syllables = (lettersOnly.match(/[aeiouy]{1,2}/g) || []).length || 1;
+
+	// Start from min
+	let score = min;
+
+	// Very common/short words should stay near the minimum
+	const extremelyEasy = new Set([
+		'cup', 'car', 'cat', 'dog', 'bed', 'pen', 'cupboard', 'hat', 'map', 'key', 'sun', 'moon', 'egg', 'ball', 'book', 'chair', 'table', 'fork', 'spoon', 'mug'
+	]);
+	if (extremelyEasy.has(lettersOnly)) {
+		return Math.min(max, Math.max(min, min + 0));
+	}
+
+	// Multi-word phrases are generally easier to describe
+	if (normalized.includes(' ')) {
+		score -= 1; // bias down
+	}
+
+	// Base length contribution (longer words usually harder)
+	if (len <= 3) score += 0;
+	else if (len <= 5) score += 1;
+	else if (len <= 8) score += 2;
+	else if (len <= 11) score += 3;
+	else score += 5;
+
+	// Syllable contribution (more syllables -> slightly harder)
+	score += Math.max(0, syllables - 1);
+
+	// Penalize very short tokens (one or two letters)
+	if (lettersOnly.length <= 2) score = min;
+
+	// Adjust for difficulty bucket so medium words skew higher
+	if (difficulty === 'medium') {
+		// give a moderate boost for medium difficulty
+		score += 2;
+		// if word contains uncommon letter combinations, bump slightly
+		if (/[qxzj]/.test(lettersOnly)) score += 1;
+	}
+
+	// Clip and ensure integer
+	score = Math.round(score);
+	if (score < min) score = min;
+	if (score > max) score = max;
+
+	return score;
+}
+
 // Build word database from unified source
 let wordDatabase = [];
 
@@ -407,11 +464,16 @@ if (wordDatabaseJSON) {
 		words.forEach(word => {
 			let points;
 			if (difficulty === 'hard') {
-				// Use smart scoring for hard words
-				points = getHardWordPoints(word, range.min, range.max);
+				// Combine adaptive scoring with the existing hard-word heuristics.
+				// Use adaptive base, but allow getHardWordPoints to raise score for very abstract/complex words.
+				const adaptive = getAdaptivePoints(word, range.min, range.max, 'hard');
+				const hardSmart = getHardWordPoints(word, range.min, range.max);
+				// Take the higher of the two so abstract hard words stay challenging,
+				// while shorter/common hard-labeled words don't get unnecessarily large scores.
+				points = Math.max(adaptive, hardSmart);
 			} else {
-				// Random points for easy and medium
-				points = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+				// Adaptive scoring for easy and medium words based on complexity and length
+				points = getAdaptivePoints(word, range.min, range.max, difficulty);
 			}
 			wordDatabase.push({
 				word: word.toUpperCase(),
@@ -1563,6 +1625,14 @@ io.on("connection", (socket) => {
 		if (room && room.gameState) {
 			const gs = room.gameState;
 
+			// Prevent rapid duplicate processing of next-turn (clients may emit twice)
+			// If the last next-turn was processed less than 800ms ago, ignore this call.
+			if (gs._lastNextTurnAt && Date.now() - gs._lastNextTurnAt < 800) {
+				// Ignore rapid duplicate next-turn requests
+				return;
+			}
+			gs._lastNextTurnAt = Date.now();
+
 			// Mark that this turn has started for the current team
 			if (!gs.turnCount) {
 				gs.turnCount = {};
@@ -2557,28 +2627,38 @@ io.on("connection", (socket) => {
 							room.gameState.gameStarted
 						) {
 							if (team0Empty && team1Empty) {
-								// Both teams empty - send feedback before ending
-								handleRoomClosure(room, roomCode, "All players left").then(() => {
-									// Update team stats and emit game over with room metadata
-									updateStatsOnGameEnd(room);
-									io.to(roomCode).emit("game-over", {
-										gameState: room.gameState,
-										message: "All players left. Game ended.",
-										room,
-									});
-									// Clear player team assignments after game end
-									try {
-										for (const p of room.players) {
-											p.team = null
-											p.showInWaiting = false
+								// Both teams empty - but before ending the game check if players are
+								// still present in the room but opted into the waiting list (play-again).
+								const anyWaiting = room.players.some(p => !!p.showInWaiting)
+								if (anyWaiting) {
+									// Players are in waiting list (they chose Play Again) — do not treat
+									// this as "all players left". Just broadcast an update so clients
+									// refresh UI and wait for the play-again host to start the next game.
+									io.to(roomCode).emit('team-updated', { room })
+								} else {
+									// No waiting players — truly all players left, end the game
+									handleRoomClosure(room, roomCode, "All players left").then(() => {
+										// Update team stats and emit game over with room metadata
+										updateStatsOnGameEnd(room);
+										io.to(roomCode).emit("game-over", {
+											gameState: room.gameState,
+											message: "All players left. Game ended.",
+											room,
+										});
+										// Clear player team assignments after game end
+										try {
+											for (const p of room.players) {
+												p.team = null
+												p.showInWaiting = false
+											}
+											room.gameState = null;
+											room.started = false;
+											io.to(roomCode).emit('team-updated', { room })
+										} catch (e) {
+											console.error('Error clearing teams after all-players-left game-over:', e)
 										}
-										room.gameState = null;
-										room.started = false;
-										io.to(roomCode).emit('team-updated', { room })
-									} catch (e) {
-										console.error('Error clearing teams after all-players-left game-over:', e)
-									}
-								});
+									});
+								}
 							} else {
 								const otherTeamIndex = currentTeamIndex === 0 ? 1 : 0;
 								if (room.gameState.teams[otherTeamIndex].players.length > 0) {
@@ -3609,21 +3689,40 @@ io.on("connection", (socket) => {
 							const team0Empty = room.gameState.teams[0].players.length === 0;
 							const team1Empty = room.gameState.teams[1].players.length === 0;
 
-							// If both teams are empty, end the game
+							// If both teams are empty, decide whether to end the game or preserve lobby
 							if (team0Empty && team1Empty) {
-								// Both teams empty from disconnect - send feedback before ending
-								handleRoomClosure(room, roomCode, "All players disconnected").then(() => {
-									// Update stats and emit game-over with room metadata
-									updateStatsOnGameEnd(room);
-									io.to(roomCode).emit("game-over", {
-										gameState: room.gameState,
-										message: "All players left. Game ended.",
-										room,
-									});
-									// Preserve player.team assignments; just mark game state cleared
+								// If players remain who've opted into Play Again (waiting list),
+								// don't trigger the full game-over flow — keep the room available
+								// so the waiting players can start a new game.
+								const waitingExists = Array.isArray(room.players) && room.players.some(p => p && p.showInWaiting);
+								if (waitingExists) {
+									console.log(`Room ${roomCode} has teams empty but ${room.players.filter(p => p && p.showInWaiting).length} player(s) waiting for Play Again — skipping game-over`);
+									// Clear running flags so clients return to lobby UI, but avoid
+									// calling handleRoomClosure/updateStats so we don't treat this
+									// as an unexpected full-room abandonment.
 									room.gameState = null;
 									room.started = false;
-								});
+									// Notify clients to refresh team/waiting lists
+									try {
+										io.to(roomCode).emit('team-updated', { room });
+									} catch (err) {
+										console.error('Error emitting team-updated after disconnect guard:', err);
+									}
+								} else {
+									// Both teams empty from disconnect - send feedback before ending
+									handleRoomClosure(room, roomCode, "All players disconnected").then(() => {
+										// Update stats and emit game-over with room metadata
+										updateStatsOnGameEnd(room);
+										io.to(roomCode).emit("game-over", {
+											gameState: room.gameState,
+											message: "All players left. Game ended.",
+											room,
+										});
+										// Preserve player.team assignments; just mark game state cleared
+										room.gameState = null;
+										room.started = false;
+									});
+								}
 							}
 
 							// If describer left during active turn, notify players
