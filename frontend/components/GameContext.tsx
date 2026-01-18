@@ -68,6 +68,7 @@ interface GameContextType {
   notification: Notification | null
   notifications: Notification[]
   teamSwitchingLocked: boolean
+  roomJoiningLocked: boolean
   lobbyTeamCount: number
   tabooReporting: boolean
   tabooVoting: boolean
@@ -78,7 +79,7 @@ interface GameContextType {
   createRoom: (name: string) => void
   joinRoom: (code: string, name: string) => void
   joinTeam: (teamIndex: number) => void
-  startGame: (teamCount?: number) => void
+  startGame: (teamCount?: number, maxRounds?: number) => void
   leaveGame: () => void
   setCurrentScreen: (screen: 'room' | 'lobby' | 'game' | 'gameover') => void
   submitWordFeedback: (word: string, feedback: string, difficulty: string) => void
@@ -102,6 +103,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [isReconnecting, setIsReconnecting] = useState(false) // Show loading during reconnection
   const [players, setPlayers] = useState<Player[]>([])
   const [teamSwitchingLocked, setTeamSwitchingLocked] = useState(false)
+  const [roomJoiningLocked, setRoomJoiningLocked] = useState(false)
   const [midTurnJoinData, setMidTurnJoinData] = useState<any>(null)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const notification = notifications.length > 0 ? notifications[0] : null
@@ -149,6 +151,40 @@ export function GameProvider({ children }: { children: ReactNode }) {
     playerContributions: {},
     gameStarted: false
   })
+
+  // Helper: reset all local room-scoped state to a fresh default
+  const resetLocalRoomState = () => {
+    setPlayers([])
+    setMyTeam(null)
+    setCurrentScreen('room')
+    setLobbyTeamCount(2)
+    setTeamStats({ wins: [0, 0], ties: [0, 0], losses: [0, 0], streaks: [0, 0] })
+    setGameState({
+      teams: [
+        { name: 'Team 1', players: [], score: 0 },
+        { name: 'Team 2', players: [], score: 0 }
+      ],
+      teamCount: 2,
+      currentTeamIndex: 0,
+      currentDescriberIndex: [0, 0],
+      round: 1,
+      maxRounds: 12,
+      turnTime: 60,
+      timeRemaining: 60,
+      currentWords: [],
+      guessedWords: [],
+      skippedWords: [],
+      playerContributions: {},
+    } as GameState)
+    setRoomJoiningLocked(false)
+    setTeamSwitchingLocked(false)
+    setTabooReporting(false)
+    setTabooVoting(false)
+  }
+
+  // When this client initiates a play-again or starts a game, suppress lock/unlock notifications
+  // for a short window so the admin/host who triggered the automatic reset doesn't see them.
+  const suppressLockNotificationsUntil = useRef<number>(0)
 
   // Initialize Discord SDK if running as Discord Activity
   useEffect(() => {
@@ -348,6 +384,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
       // Set team stats
       if (data.room?.teamStats) setTeamStats(data.room.teamStats)
+      // Set room joining lock state if provided
+      if (data.room?.joiningLocked !== undefined) setRoomJoiningLocked(!!data.room.joiningLocked)
       // Find this player's team assignment
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
@@ -374,6 +412,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
       // Set team stats
       if (data.room?.teamStats) setTeamStats(data.room.teamStats)
+      // Set room joining lock state if provided
+      if (data.room?.joiningLocked !== undefined) setRoomJoiningLocked(!!data.room.joiningLocked)
       // Set taboo settings from server
       if (data.tabooReporting !== undefined) {
         setTabooReporting(data.tabooReporting)
@@ -404,6 +444,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       } else if (data.gameState?.teamCount) {
         setLobbyTeamCount(data.gameState.teamCount)
       }
+      // Set room joining lock state if provided
+      if (data.room?.joiningLocked !== undefined) setRoomJoiningLocked(!!data.room.joiningLocked)
       setCurrentScreen('lobby') // Show lobby so they can pick a team
     })
 
@@ -416,6 +458,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
       // Restore team stats
       if (data.room?.teamStats) setTeamStats(data.room.teamStats)
+      // Set room joining lock state if provided
+      if (data.room?.joiningLocked !== undefined) setRoomJoiningLocked(!!data.room.joiningLocked)
       // Find player's team
       const player = data.room.players.find((p: any) => p.id === newSocket.id)
       if (player) {
@@ -510,6 +554,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
     newSocket.on('team-updated', (data) => {
       console.log('🔄 team-updated event received:', data)
       setPlayers(data.room.players)
+      // Sync lock state from server to avoid UI misalignment
+      if (data.room?.joiningLocked !== undefined) setRoomJoiningLocked(!!data.room.joiningLocked)
+      if (data.room?.teamSwitchingLocked !== undefined) setTeamSwitchingLocked(!!data.room.teamSwitchingLocked)
       // Update myTeam based on current player's team assignment from server
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
@@ -525,6 +572,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     newSocket.on('team-updated-midgame', (data) => {
       console.log('🔄 team-updated-midgame event received:', data)
+      // Sync lock state early to keep buttons/UI consistent
+      if (data.room?.joiningLocked !== undefined) setRoomJoiningLocked(!!data.room.joiningLocked)
+      if (data.room?.teamSwitchingLocked !== undefined) setTeamSwitchingLocked(!!data.room.teamSwitchingLocked)
       setPlayers(data.room.players)
       setGameState(data.gameState)
 
@@ -813,13 +863,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setTimeout(() => setNotification(null), 4000)
       setCurrentScreen('room')
       setRoomCode(null)
-      setPlayers([])
+      // Fully reset local room-scoped state when explicitly removed
       setIsHost(false)
       setIsAdmin(false)
-      setMyTeam(null)
-      // Reset taboo toggles to default (off)
-      setTabooReporting(false)
-      setTabooVoting(false)
+      resetLocalRoomState()
       // Clear session data
       localStorage.removeItem('taboo_room_code')
       localStorage.removeItem('taboo_player_name')
@@ -830,13 +877,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setTimeout(() => setNotification(null), 4000)
       setCurrentScreen('room')
       setRoomCode(null)
-      setPlayers([])
       setIsHost(false)
       setIsAdmin(false)
-      setMyTeam(null)
-      // Reset taboo toggles to default (off)
-      setTabooReporting(false)
-      setTabooVoting(false)
+      // Fully reset local room-scoped state when leaving
+      resetLocalRoomState()
       // Clear session data
       localStorage.removeItem('taboo_room_code')
       localStorage.removeItem('taboo_player_name')
@@ -846,9 +890,27 @@ export function GameProvider({ children }: { children: ReactNode }) {
       // Defensive: server may emit without payload (or client may receive undefined)
       const locked = data?.locked === true
       setTeamSwitchingLocked(locked)
-      const message = locked ? 'Team switching has been locked by the host' : 'Team switching has been unlocked'
-      setNotification({ message, type: 'info' })
-      setTimeout(() => setNotification(null), 3000)
+      // If this client recently initiated a play-again/start, suppress lock notifications
+      if (Date.now() < suppressLockNotificationsUntil.current) return
+      // Only show notification when this change was manual (not an automatic reset)
+      if (!data?.silent) {
+        const message = locked ? 'Team switching has been locked by the host' : 'Team switching has been unlocked'
+        setNotification({ message, type: 'info' })
+        setTimeout(() => setNotification(null), 3000)
+      }
+    })
+
+    newSocket.on('room-joining-locked', (data) => {
+      const locked = data?.locked === true
+      setRoomJoiningLocked(locked)
+      // If this client recently initiated a play-again/start, suppress lock notifications
+      if (Date.now() < suppressLockNotificationsUntil.current) return
+      // Only notify players when this was a manual toggle by admin/host
+      if (!data?.silent) {
+        const message = locked ? 'Room joining has been locked by the host' : 'Room joining has been unlocked'
+        setNotification({ message, type: 'info' })
+        setTimeout(() => setNotification(null), 3000)
+      }
     })
 
     newSocket.on('describer-changed', (data) => {
@@ -864,8 +926,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
       const msg = (data?.message || '').toString()
       setNotification({ message: msg || 'An error occurred', type: 'warning' })
       setTimeout(() => setNotification(null), 3000)
-
       const isRoomNotFound = /room not found|room no longer exists|room does not exist|Room not found/i.test(msg)
+      // Expected lock/permission messages that should not trigger console.error
+      const isExpectedLock = /team switching is currently locked|team switching is currently locked by the host|room is currently locked|Room is currently locked|Room is locked/i.test(msg)
       if (isRoomNotFound) {
         // Clear stored session and local state
         localStorage.removeItem('taboo_room_code')
@@ -880,7 +943,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         try { router.push('/') } catch (e) { }
       }
       // Known, user-facing socket errors (like Room not found) are warnings, not internal errors
-      if (isRoomNotFound) {
+      if (isRoomNotFound || isExpectedLock) {
         console.warn('Socket warning:', msg)
       } else {
         console.error('Socket error:', msg)
@@ -915,12 +978,16 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const createRoom = (name: string) => {
+    // Prepare a fresh local state for the new room to avoid leftover data
+    resetLocalRoomState()
     setPlayerName(name)
     localStorage.setItem('taboo_player_name', name)
     socket?.emit('create-room', { playerName: name, sessionId: localStorage.getItem('taboo_session_id') })
   }
 
   const joinRoom = (code: string, name: string) => {
+    // Prepare a fresh local state for joining another room
+    resetLocalRoomState()
     setPlayerName(name)
     localStorage.setItem('taboo_player_name', name)
     socket?.emit('join-room', { roomCode: code, playerName: name, sessionId: localStorage.getItem('taboo_session_id') })
@@ -931,7 +998,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     socket?.emit('join-team', { roomCode, teamIndex })
   }
 
-  const startGame = (teamCount: number = 2) => {
+  const startGame = (teamCount: number = 2, maxRounds?: number) => {
     if (!isHost) return
 
     // Build teams array based on teamCount, preserving any custom team names in current gameState
@@ -948,7 +1015,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       currentTeamIndex: 0,
       currentDescriberIndex: teamCount === 3 ? [0, 0, 0] : [0, 0],
       round: 1,
-      maxRounds: 12,
+      maxRounds: typeof maxRounds === 'number' ? maxRounds : (gameState?.maxRounds || 12),
       turnTime: 60,
       timeRemaining: 60,
       currentWords: [],
@@ -958,6 +1025,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       teamCount
     }
 
+    // Suppress lock notifications briefly for the initiating client
+    suppressLockNotificationsUntil.current = Date.now() + 2500
     socket?.emit('start-game', { roomCode, gameState: newGameState })
   }
 
@@ -972,10 +1041,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
     setTabooVoting(false)
     // Reset room state
     setRoomCode(null)
-    setPlayers([])
     setIsHost(false)
     setIsAdmin(false)
-    setCurrentScreen('room')
+    // Fully reset local room-scoped state for a fresh start
+    resetLocalRoomState()
   }
 
   // Function to update taboo settings (host only)
@@ -1008,6 +1077,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setPlayers((prev) => prev.map((p) => (p.id === socket?.id ? { ...p, team: null, showInWaiting: true } : p)))
       setMyTeam(null)
       setCurrentScreen('lobby')
+      // Suppress lock notifications for the initiating client
+      suppressLockNotificationsUntil.current = Date.now() + 2500
     } catch (e) {
       console.error('localPlayerPlayAgain error', e)
     }
@@ -1030,6 +1101,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         notification,
         notifications,
         teamSwitchingLocked,
+        roomJoiningLocked,
         lobbyTeamCount,
         tabooReporting,
         tabooVoting,

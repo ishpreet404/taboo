@@ -6,10 +6,17 @@ import { useEffect, useRef, useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function LobbyScreen() {
-  const { roomCode, players, isHost, isAdmin, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted, gameState, setNotification } = useGame()
+  const { roomCode, players, isHost, isAdmin, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, roomJoiningLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted, gameState, setNotification } = useGame()
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
+  const [selectedRounds, setSelectedRounds] = useState<number>(12)
   const [editingTeamIndex, setEditingTeamIndex] = useState<number | null>(null)
   const [editingTeamName, setEditingTeamName] = useState<string>('')
+
+  useEffect(() => {
+    try {
+      if (gameState?.maxRounds) setSelectedRounds(gameState.maxRounds)
+    } catch (e) { }
+  }, [gameState?.maxRounds])
 
   // Clear old team names from localStorage when joining OR leaving a room
   useEffect(() => {
@@ -411,6 +418,26 @@ export default function LobbyScreen() {
                     )
                   })()}
                 </div>
+                {/* Number of Rounds selector */}
+                <div className="ml-4 flex items-center gap-2">
+                  <span className="text-sm text-gray-400 whitespace-nowrap">Rounds:</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => isHost && setSelectedRounds(6)}
+                      disabled={!isHost}
+                      className={`px-3 py-1 rounded-lg font-semibold transition-all ${selectedRounds === 6 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'} ${!isHost ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      6
+                    </button>
+                    <button
+                      onClick={() => isHost && setSelectedRounds(12)}
+                      disabled={!isHost}
+                      className={`px-3 py-1 rounded-lg font-semibold transition-all ${selectedRounds === 12 ? 'bg-blue-500 text-white' : 'bg-white/10 text-gray-400 hover:bg-white/20'} ${!isHost ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      12
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Center: Randomize button */}
@@ -501,7 +528,7 @@ export default function LobbyScreen() {
 
         {isHost && (
           <button
-            onClick={() => startGame(lobbyTeamCount)}
+            onClick={() => startGame(lobbyTeamCount, selectedRounds)}
             disabled={!canStart}
             className="px-8 md:px-12 py-3 md:py-4 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 rounded-xl font-bold text-base md:text-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-105 flex items-center justify-center gap-2 md:gap-3 mx-auto"
           >
@@ -582,15 +609,15 @@ export default function LobbyScreen() {
 
           <button
             onClick={() => joinTeam(0)}
-            disabled={myTeam === 0 || teamSwitchingLocked}
+            disabled={myTeam === 0 || (teamSwitchingLocked && myTeam !== null) || (roomJoiningLocked && myTeam === null)}
             className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 0
               ? 'bg-blue-500/50 cursor-not-allowed'
-              : teamSwitchingLocked
+              : (teamSwitchingLocked && myTeam !== null)
                 ? 'bg-gray-500/50 cursor-not-allowed'
                 : 'bg-blue-500 hover:bg-blue-600 hover:scale-105'
               }`}
           >
-            {myTeam === 0 ? 'Current Team' : teamSwitchingLocked ? 'Locked' : `Join ${teamName(0, 'Team 1')}`}
+            {myTeam === 0 ? 'Current Team' : (teamSwitchingLocked && myTeam !== null) ? 'Locked' : (roomJoiningLocked && myTeam === null) ? 'Room Locked' : `Join ${teamName(0, 'Team 1')}`}
           </button>
         </motion.div>
 
@@ -655,15 +682,15 @@ export default function LobbyScreen() {
 
           <button
             onClick={() => joinTeam(1)}
-            disabled={myTeam === 1 || teamSwitchingLocked}
+            disabled={myTeam === 1 || (teamSwitchingLocked && myTeam !== null) || (roomJoiningLocked && myTeam === null)}
             className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 1
               ? 'bg-red-500/50 cursor-not-allowed'
-              : teamSwitchingLocked
+              : (teamSwitchingLocked && myTeam !== null)
                 ? 'bg-gray-500/50 cursor-not-allowed'
                 : 'bg-red-500 hover:bg-red-600 hover:scale-105'
               }`}
           >
-            {myTeam === 1 ? 'Current Team' : teamSwitchingLocked ? 'Locked' : `Join ${teamName(1, 'Team 2')}`}
+            {myTeam === 1 ? 'Current Team' : (teamSwitchingLocked && myTeam !== null) ? 'Locked' : (roomJoiningLocked && myTeam === null) ? 'Room Locked' : `Join ${teamName(1, 'Team 2')}`}
           </button>
         </motion.div>
 
@@ -729,15 +756,15 @@ export default function LobbyScreen() {
 
             <button
               onClick={() => joinTeam(2)}
-              disabled={myTeam === 2 || teamSwitchingLocked}
+              disabled={myTeam === 2 || (teamSwitchingLocked && myTeam !== null) || (roomJoiningLocked && myTeam === null)}
               className={`w-full py-2.5 md:py-3 px-4 md:px-6 rounded-xl font-semibold transition-all transform text-sm md:text-base ${myTeam === 2
                 ? 'bg-green-500/50 cursor-not-allowed'
-                : teamSwitchingLocked
+                : (teamSwitchingLocked && myTeam !== null)
                   ? 'bg-gray-500/50 cursor-not-allowed'
                   : 'bg-green-500 hover:bg-green-600 hover:scale-105'
                 }`}
             >
-              {myTeam === 2 ? 'Current Team' : teamSwitchingLocked ? 'Locked' : `Join ${teamName(2, 'Team 3')}`}
+              {myTeam === 2 ? 'Current Team' : (teamSwitchingLocked && myTeam !== null) ? 'Locked' : (roomJoiningLocked && myTeam === null) ? 'Room Locked' : `Join ${teamName(2, 'Team 3')}`}
             </button>
           </motion.div>
         )}

@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats, players } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, roomJoiningLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats, players } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
@@ -1536,7 +1536,7 @@ export default function GameScreen() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     onClick={handleToggleTeamSwitching}
-                    className={`px-4 py-3 glass-strong rounded-lg transition-colors flex items-center justify-center gap-2 border ${teamSwitchingLocked
+                    className={`px-3 py-2 h-12 glass-strong rounded-lg transition-colors flex items-center justify-center gap-2 border text-sm ${teamSwitchingLocked
                       ? 'hover:bg-green-500/20 text-green-400 border-green-500/30'
                       : 'hover:bg-orange-500/20 text-orange-400 border-orange-500/30'
                       }`}
@@ -1554,15 +1554,34 @@ export default function GameScreen() {
                     )}
                   </button>
                   <button
+                    onClick={handleToggleTeamLock}
+                    className={`px-3 py-2 h-12 glass-strong rounded-lg transition-colors flex items-center justify-center gap-2 border text-sm ${roomJoiningLocked
+                      ? 'hover:bg-green-500/20 text-green-400 border-green-500/30'
+                      : 'hover:bg-orange-500/20 text-orange-400 border-orange-500/30'
+                      }`}
+                  >
+                    {roomJoiningLocked ? (
+                      <>
+                        <Unlock className="w-5 h-5" />
+                        Unlock Room
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-5 h-5" />
+                        Lock Room
+                      </>
+                    )}
+                  </button>
+                  <button
                     onClick={handleRandomizeTeams}
-                    className="px-4 py-3 glass-strong rounded-lg hover:bg-purple-500/20 transition-colors flex items-center justify-center gap-2 text-purple-400 border border-purple-500/30"
+                    className="px-3 py-2 h-12 glass-strong rounded-lg hover:bg-purple-500/20 transition-colors flex items-center justify-center gap-2 text-purple-400 border border-purple-500/30 text-sm"
                   >
                     <Shuffle className="w-5 h-5" />
                     Randomize Teams
                   </button>
                   <button
                     onClick={handleToggleThirdTeam}
-                    className={`px-4 py-3 glass-strong rounded-lg transition-colors flex items-center justify-center gap-2 border ${gameState.teamCount === 3
+                    className={`px-3 py-2 h-12 glass-strong rounded-lg transition-colors flex items-center justify-center gap-2 border text-sm ${gameState.teamCount === 3
                       ? 'hover:bg-red-500/20 text-red-400 border-red-500/30'
                       : 'hover:bg-green-500/20 text-green-400 border-green-500/30'
                       }`}

@@ -1154,6 +1154,11 @@ io.on("connection", (socket) => {
 
 			if (room.started) {
 				// Calculate real-time remaining if there's an active turn
+				// If room joining is locked, prevent new players from joining the room
+				if (room.joiningLocked) {
+					socket.emit("error", { message: "Room is currently locked by the host" });
+					return;
+				}
 				let gameStateWithTime = room.gameState;
 				if (room.gameState && room.gameState.turnActive && room.gameState.turnStartTime) {
 					const elapsedSeconds = Math.floor((Date.now() - room.gameState.turnStartTime) / 1000);
@@ -1272,10 +1277,21 @@ io.on("connection", (socket) => {
 		const room = gameRooms.get(roomCode);
 
 		if (room) {
-			// Check if team switching is locked
-			if (room.teamSwitchingLocked) {
+			// Check if team switching is locked: allow new joiners (team === null) to join teams,
+			// but prevent existing players from switching teams when locked.
+			const currentPlayer = room.players.find((p) => p.id === socket.id);
+			if (room.teamSwitchingLocked && currentPlayer && currentPlayer.team !== null) {
 				socket.emit("error", {
 					message: "Team switching is currently locked by the host",
+				});
+				return;
+			}
+
+			// If room joining is locked, prevent players who were not previously in the room
+			// from joining teams (this is a strict room lock).
+			if (room.joiningLocked && currentPlayer && currentPlayer.team === null) {
+				socket.emit("error", {
+					message: "Room is locked. New players cannot join teams right now.",
 				});
 				return;
 			}
@@ -1494,6 +1510,14 @@ io.on("connection", (socket) => {
 			// Reset used words for the new game
 			room.usedWordIndices = new Set();
 			room.wordPools = null; // Reset word pools
+
+			// Ensure any previous room/team locks are cleared when a fresh game starts
+			// This prevents stale locks from blocking new joiners or preventing team changes
+			room.joiningLocked = false;
+			room.teamSwitchingLocked = false;
+			// Notify clients that locks are lifted for the new game (silent automatic reset)
+			io.to(roomCode).emit('room-joining-locked', { locked: false, silent: true });
+			io.to(roomCode).emit('team-switching-locked', { locked: false, silent: true });
 
 			// Pre-generate fair word pools for all teams
 			// This ensures both teams get identical difficulty distribution
@@ -2916,6 +2940,22 @@ io.on("connection", (socket) => {
 		}
 	});
 
+	// Admin: Toggle room joining lock (prevent new players from joining teams)
+	socket.on("admin-toggle-team-lock", (data) => {
+		const { roomCode } = data;
+		const room = gameRooms.get(roomCode);
+
+		if (room && isAdmin(room, socket.id)) {
+			room.joiningLocked = !room.joiningLocked;
+			io.to(roomCode).emit("room-joining-locked", {
+				locked: room.joiningLocked,
+			});
+			console.log(
+				`Room joining ${room.joiningLocked ? "locked" : "unlocked"} in room ${roomCode}`
+			);
+		}
+	});
+
 	// Admin: Randomize teams
 	socket.on("admin-randomize-teams", (data) => {
 		const { roomCode } = data;
@@ -3420,6 +3460,18 @@ io.on("connection", (socket) => {
 			room.host = socket.id
 			room.playAgainHostAssigned = true
 			console.log(`Assigned new host ${player.name} (${socket.id}) for room ${roomCode} via player-play-again`)
+		}
+
+		// Clear any stale locks when players opt into play-again so the lobby is usable
+		if (room.joiningLocked) {
+			room.joiningLocked = false
+			io.to(roomCode).emit('room-joining-locked', { locked: false, silent: true })
+			console.log(`Cleared room joining lock for room ${roomCode} due to play-again`)
+		}
+		if (room.teamSwitchingLocked) {
+			room.teamSwitchingLocked = false
+			io.to(roomCode).emit('team-switching-locked', { locked: false, silent: true })
+			console.log(`Cleared team switching lock for room ${roomCode} due to play-again`)
 		}
 
 		// Broadcast updated players/room so all clients see the waiting list change
