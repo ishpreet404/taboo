@@ -9,6 +9,8 @@ yarn-error.log*
 .netlify/
 dist/
 .cache/
+New_WordPack.json
+code-simplifier.md
 
 # Sensitive word database (optional - remove if you want to share word list)
 # wordDatabase.json

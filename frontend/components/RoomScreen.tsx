@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Heart, Users, Wifi, WifiOff } from 'lucide-react'
+import { ChevronDown, Heart, Users, Wifi, WifiOff } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import pkg from '../package.json'
@@ -9,10 +9,11 @@ import { useGame } from './GameContext'
 
 // Supporters data - add new supporters here (include currency symbol in amount)
 const supporters = [
+  { name: 'GraphOverflow', amount: '₹ 600' },
   { name: 'Ansh', amount: '$ 1.50' },
-  { name: 'Irshadpi77', amount: '₹ 100' },
   { name: 'Sumedh Lodhi', amount: '₹ 100' },
   { name: 'Magga', amount: '₹ 69' },
+  { name: 'Nyx', amount: '₹ 50' },
   { name: 'Shubhxho', amount: '₹ 20' },
   { name: 'Blok', amount: '₹ 6.70' },
   { name: 'Aditya Uniyal', amount: '₹ 2.04' },
@@ -21,17 +22,36 @@ const supporters = [
 
 ]
 
+// Word pack options for room creation
+export const WORD_PACKS = [
+  { key: 'standard', name: 'Taboo - Standard', description: 'Easy + Medium + Hard mix', color: 'from-blue-500 to-blue-600', tags: ['EN'] },
+  { key: 'difficult', name: 'Taboo - Difficult', description: 'All difficulties including Insane', color: 'from-purple-500 to-purple-600', tags: ['EN'] },
+  { key: 'intense', name: 'Taboo - Intense', description: 'Hard + Insane only - Max challenge!', color: 'from-pink-500 to-rose-600', tags: ['EN'] },
+  { key: 'easy', name: 'Taboo - Easy', description: 'Easy words only (5-12 pts)', color: 'from-green-500 to-green-600', tags: ['EN'] },
+  { key: 'medium', name: 'Taboo - Medium', description: 'Medium words only (13-25 pts)', color: 'from-yellow-500 to-yellow-600', tags: ['EN'] },
+  { key: 'hard', name: 'Taboo - Hard', description: 'Hard words only (26-40 pts)', color: 'from-orange-500 to-orange-600', tags: ['EN'] },
+  { key: 'insane', name: 'Taboo - Insane', description: 'Insane words only (41-60 pts)', color: 'from-red-500 to-red-600', tags: ['EN'] },
+
+  // Hindi packs (use wordDatabase.json keys: hindi_easy, hindi_medium, hindi_hard)
+  { key: 'hindi', name: 'Taboo - Hindi', description: 'Mix of Hindi Easy + Medium + Hard', color: 'from-blue-500 to-red-500', tags: ['HI'] },
+  { key: 'hindi_easy', name: 'Taboo - Hindi (Easy)', description: 'Hindi Easy words', color: 'from-green-500 to-green-600', tags: ['HI'] },
+  { key: 'hindi_medium', name: 'Taboo - Hindi (Medium)', description: 'Hindi Medium words', color: 'from-yellow-500 to-yellow-600', tags: ['HI'] },
+  { key: 'hindi_hard', name: 'Taboo - Hindi (Hard)', description: 'Hindi Hard words', color: 'from-orange-500 to-orange-600', tags: ['HI'] },
+]
+
 export default function RoomScreen() {
   const { createRoom, joinRoom, connected } = useGame()
   const router = useRouter()
   const [mode, setMode] = useState<'select' | 'create' | 'join'>('select')
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
+  const [selectedWordPack, setSelectedWordPack] = useState('standard')
+  const [showWordPackDropdown, setShowWordPackDropdown] = useState(false)
 
   const handleCreateRoom = (e: React.FormEvent) => {
     e.preventDefault()
     if (name.trim()) {
-      createRoom(name.trim())
+      createRoom(name.trim(), selectedWordPack)
     }
   }
 
@@ -199,6 +219,49 @@ export default function RoomScreen() {
                   required
                 />
               </div>
+
+              {/* Word Pack Selector */}
+              <div>
+                <label className="block text-sm font-medium mb-2">Word Pack</label>
+                <button
+                  type="button"
+                  onClick={() => setShowWordPackDropdown(!showWordPackDropdown)}
+                  className={`w-full px-4 py-3 bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} rounded-xl font-semibold text-white transition-all flex items-center justify-between text-sm md:text-base`}
+                >
+                  <span>{WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Taboo - Standard'}</span>
+                  <ChevronDown className={`w-5 h-5 transition-transform ${showWordPackDropdown ? 'rotate-180' : ''}`} />
+                </button>
+
+                {showWordPackDropdown && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    className="mt-2 bg-gray-900/95 backdrop-blur-lg border border-white/20 rounded-xl shadow-xl max-h-[200px] overflow-y-auto"
+                    style={{
+                      scrollbarWidth: 'thin',
+                      scrollbarColor: 'rgba(255, 255, 255, 0.3) rgba(255, 255, 255, 0.1)'
+                    }}
+                  >
+                    {WORD_PACKS.map((pack) => (
+                      <button
+                        key={pack.key}
+                        type="button"
+                        onClick={() => {
+                          setSelectedWordPack(pack.key)
+                          setShowWordPackDropdown(false)
+                        }}
+                        className={`w-full px-4 py-2.5 text-left hover:bg-white/10 transition-all flex flex-col ${selectedWordPack === pack.key ? 'bg-white/15' : ''}`}
+                      >
+                        <span className={`font-semibold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent text-sm`}>
+                          {pack.name}
+                        </span>
+                        <span className="text-xs text-gray-400">{pack.description}</span>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </div>
+
               <div className="flex gap-3">
                 <button
                   type="button"
