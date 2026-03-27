@@ -4583,7 +4583,30 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+function startRenderKeepAlive() {
+	const renderUrl = process.env.RENDER_EXTERNAL_URL;
+	const keepAliveEnabled = process.env.ENABLE_RENDER_KEEPALIVE !== "false";
+
+	if (!renderUrl || !keepAliveEnabled) return;
+
+	const intervalMs = 210000; // 3.5 minutes
+	const healthUrl = `${renderUrl.replace(/\/$/, "")}/health`;
+
+	const ping = async () => {
+		try {
+			await fetch(healthUrl, { method: "GET", cache: "no-store" });
+		} catch {
+			// Keepalive is best-effort; ignore transient network failures.
+		}
+	};
+
+	ping();
+	setInterval(ping, intervalMs);
+}
+
 server.listen(PORT, () => {
 	console.log(`Server running on port ${PORT}`);
 	console.log(`Open http://localhost:${PORT} to play`);
+	startRenderKeepAlive();
 });
