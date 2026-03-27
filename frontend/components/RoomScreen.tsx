@@ -59,7 +59,7 @@ export default function RoomScreen() {
             transition={{ type: 'spring', stiffness: 200 }}
             className="flex justify-center mb-4"
           >
-            <img src="/taboo-logo.png" alt="Taboo Logo" className="w-32 h-32 md:w-40 md:h-40" />
+            <img src="/logo.png" alt="Taboo Logo" className="w-32 h-32 md:w-40 md:h-40" />
           </motion.div>
           <motion.h1
             initial={{ scale: 0.5 }}

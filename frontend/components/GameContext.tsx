@@ -200,6 +200,22 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000'
+
+    // Keep Render service warm by pinging /health every 3.5 minutes.
+    if (!/onrender\.com/i.test(serverUrl)) return
+
+    const pingServer = () => {
+      fetch(`${serverUrl}/health`, { cache: 'no-store' }).catch(() => { })
+    }
+
+    pingServer()
+    const intervalId = window.setInterval(pingServer, 210000)
+
+    return () => window.clearInterval(intervalId)
+  }, [])
+
+  useEffect(() => {
+    const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000'
     console.log('Connecting to server:', serverUrl)
 
     // Generate or retrieve session ID
