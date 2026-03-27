@@ -1,6 +1,5 @@
 'use client'
 
-import { getDiscordUser, isDiscordActivity, setupDiscordSdk } from '@/lib/discordSdk'
 import { useRouter } from 'next/navigation'
 import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
@@ -198,34 +197,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
   // When this client initiates a play-again or starts a game, suppress lock/unlock notifications
   // for a short window so the admin/host who triggered the automatic reset doesn't see them.
   const suppressLockNotificationsUntil = useRef<number>(0)
-
-  // Initialize Discord SDK if running as Discord Activity
-  useEffect(() => {
-    const initDiscord = async () => {
-      if (isDiscordActivity()) {
-        try {
-          console.log('Initializing Discord SDK...')
-          const sdk = await setupDiscordSdk()
-          if (sdk) {
-            console.log('Discord Activity initialized successfully')
-            // Get Discord user info and auto-set player name
-            const user = await getDiscordUser()
-            if (user) {
-              setPlayerName(user.username)
-              console.log('Discord user logged in:', user.username)
-            }
-          } else {
-            console.warn('Discord SDK setup returned null - running in fallback mode')
-          }
-        } catch (error) {
-          console.error('Discord initialization failed:', error)
-          console.log('Continuing in non-Discord mode')
-        }
-      }
-    }
-
-    initDiscord()
-  }, [])
 
   useEffect(() => {
     const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000'
