@@ -10,11 +10,15 @@ export const metadata: Metadata = {
   description: `${APP_NAME}: ${APP_TAGLINE}. Play with friends online, no sign-up.`,
 }
 
+// Fixed 1:1 viewport. The old 0.9 initial scale made phones (and the app's WebView)
+// lay the page out wider than the screen and then rescale it, which is what caused
+// the zooming/panning. Density on small screens is handled in globals.css instead.
 export const viewport = {
   width: 'device-width',
-  initialScale: 0.9,
-  maximumScale: 1.0,
-  userScalable: true,
+  initialScale: 1,
+  minimumScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   viewportFit: 'cover',
 }
 

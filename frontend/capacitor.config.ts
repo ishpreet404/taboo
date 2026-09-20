@@ -6,6 +6,8 @@ const config: CapacitorConfig = {
   appId: 'com.infernowords.app',
   appName: 'Inferno Words',
   webDir: 'out',
+  // The UI is laid out 1:1 for the screen; pinch/double-tap zoom only breaks it
+  zoomEnabled: false,
   android: {
     // https://localhost origin: secure context for WebRTC + storage
     allowMixedContent: false,
