@@ -1,0 +1,62 @@
+# Google Play automation. The .aab is built and signed by Gradle in CI (see
+# .github/workflows/ci.yml); these lanes only talk to Play.
+#
+#   fastlane android internal      upload the built .aab to the Internal testing track
+#   fastlane android promote       move the newest build between tracks
+#   fastlane android listing       push title/descriptions from fastlane/metadata
+#
+# What this can NOT do (Play Console only): the first upload of a new app, the content
+# rating / data safety / target audience forms, and applying for production access.
+
+default_platform(:android)
+
+AAB_PATH = File.expand_path("../app/build/outputs/bundle/release/app-release.aab", __dir__)
+
+platform :android do
+  desc "Upload the release .aab to the Internal testing track"
+  lane :internal do
+    upload_to_play_store(
+      track: "internal",
+      aab: AAB_PATH,
+      # Until the app has passed its first review Play only accepts "draft" releases
+      # through the API (you then press "Start rollout" in the console). Afterwards set
+      # the repository variable PLAY_RELEASE_STATUS=completed for hands-off releases.
+      release_status: ENV.fetch("PLAY_RELEASE_STATUS", "draft"),
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_changelogs: false
+    )
+  end
+
+  desc "Promote the newest build: FROM=internal TO=alpha|beta|production [ROLLOUT=0.2]"
+  lane :promote do
+    from = ENV.fetch("FROM", "internal")
+    to = ENV.fetch("TO", "alpha") # alpha = Closed testing, beta = Open testing
+    options = {
+      track: from,
+      track_promote_to: to,
+      track_promote_release_status: ENV.fetch("PLAY_RELEASE_STATUS", "draft"),
+      skip_upload_aab: true,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_changelogs: true
+    }
+    options[:rollout] = ENV["ROLLOUT"] if ENV["ROLLOUT"]
+    upload_to_play_store(options)
+  end
+
+  desc "Push the store listing text in fastlane/metadata (does not touch images)"
+  lane :listing do
+    upload_to_play_store(
+      skip_upload_aab: true,
+      skip_upload_apk: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_changelogs: true
+    )
+  end
+end

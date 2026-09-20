@@ -1,0 +1,5 @@
+# Service-account key for the Google Play Developer API. CI writes it to a temp file
+# from the PLAY_SERVICE_ACCOUNT_JSON secret; locally, point PLAY_JSON_KEY_FILE at your
+# own copy. Never commit the key.
+json_key_file(ENV["PLAY_JSON_KEY_FILE"])
+package_name("com.infernowords.app")

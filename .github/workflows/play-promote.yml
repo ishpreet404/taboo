@@ -1,0 +1,45 @@
+name: "Play: promote release"
+
+# Manual: moves the newest build from one Play track to another.
+# internal -> alpha (Closed testing) -> production. Needs the
+# PLAY_SERVICE_ACCOUNT_JSON secret.
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Track to promote from
+        type: choice
+        options: [internal, alpha, beta]
+        default: internal
+      to:
+        description: Track to promote to (alpha = Closed testing, beta = Open testing)
+        type: choice
+        options: [alpha, beta, production]
+        default: alpha
+      rollout:
+        description: "Staged rollout fraction for production, e.g. 0.2 (empty = everyone)"
+        required: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+      - name: Promote
+        working-directory: frontend/android
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_RELEASE_STATUS: ${{ vars.PLAY_RELEASE_STATUS || 'draft' }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          ROLLOUT: ${{ inputs.rollout }}
+        run: |
+          if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then echo "PLAY_SERVICE_ACCOUNT_JSON secret is not set"; exit 1; fi
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play.json"
+          export PLAY_JSON_KEY_FILE="$RUNNER_TEMP/play.json"
+          gem install fastlane -N
+          fastlane android promote
+          rm -f "$RUNNER_TEMP/play.json"

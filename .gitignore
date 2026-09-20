@@ -26,3 +26,8 @@ frontend/tsconfig.tsbuildinfo
 *.keystore
 *.p12
 *.mobileprovision
+
+# Play service-account keys
+play-*.json
+*service-account*.json
+fastlane/report.xml

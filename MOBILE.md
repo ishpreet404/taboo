@@ -46,6 +46,29 @@ Bundle, or `keytool`), then add these repository secrets
 From then on the published APK updates in place and the `.aab` can be uploaded to Play.
 Keep the keystore file and passwords backed up and out of the repo.
 
+## Google Play uploads (fastlane)
+
+`frontend/android/fastlane` uploads builds for you once two things exist: the upload
+keystore secrets above, and a Play service account:
+
+1. Google Cloud Console: create a project, enable **Google Play Android Developer API**,
+   create a **service account**, add a JSON key and download it.
+2. Play Console > **Users and permissions** > invite the service account's email; grant
+   this app "Release to testing tracks" and "Release apps to production".
+3. GitHub > Settings > Secrets and variables > Actions > **Secrets**: add
+   `PLAY_SERVICE_ACCOUNT_JSON` with the whole JSON file as the value.
+4. Upload the **first** `.aab` by hand in Play Console (the API refuses until then).
+
+From then on every push to `main` lands in the **Internal testing** track as a draft
+(press "Start rollout" in the console). After the app has passed its first review, add
+the repository *variable* `PLAY_RELEASE_STATUS=completed` to make that automatic.
+Moving a build on is deliberate: Actions > **Play: promote release** (internal -> alpha =
+Closed testing -> production, optional staged rollout). Store listing text lives in
+`fastlane/metadata/android/en-US`; push it with `fastlane android listing`.
+
+Repository *variables* `NEXT_PUBLIC_SUPPORT_EMAIL` and `NEXT_PUBLIC_WEB_URL` are baked
+into the store build (the website gets its own copy from Vercel).
+
 ## Donations and the stores
 
 The website has a "Donate" button (UPI). **The apps deliberately do not show it**:

@@ -34,7 +34,10 @@ jobs:
     name: Android (release APK + AAB)
     runs-on: ubuntu-latest
     permissions:
-      contents: write # publishes the test APK as a release asset
+      contents: write # publishes the build as a release asset
+    env:
+      # Secrets can't be used in "if:", so expose whether the Play key exists
+      HAS_PLAY_KEY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,6 +53,11 @@ jobs:
         working-directory: frontend
       - run: npm run build:mobile
         working-directory: frontend
+        env:
+          # Repository *variables* (Settings > Secrets and variables > Actions > Variables).
+          # These are baked into the app, so the store build needs its own copy.
+          NEXT_PUBLIC_SUPPORT_EMAIL: ${{ vars.NEXT_PUBLIC_SUPPORT_EMAIL }}
+          NEXT_PUBLIC_WEB_URL: ${{ vars.NEXT_PUBLIC_WEB_URL }}
       # Optional repo secrets for a Play-ready build: ANDROID_KEYSTORE_BASE64,
       # ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD (see MOBILE.md).
       # Without them the release APK is signed with the debug key (sideload only).
@@ -62,6 +70,7 @@ jobs:
             echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
             echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
             echo "signed=release key" >> "$GITHUB_OUTPUT"
+            echo "release_signed=true" >> "$GITHUB_OUTPUT"
           else
             echo "signed=debug key (sideload/testing only, not for Google Play)" >> "$GITHUB_OUTPUT"
           fi
@@ -92,6 +101,27 @@ jobs:
           gh release delete latest-apk --yes --cleanup-tag || true
           gh release create latest-apk inferno-words.apk inferno-words.aab             --latest --target "$GITHUB_SHA"             --title "Inferno Words 1.0.${{ github.run_number }} (Android)"             --notes "Production (release) build of commit $GITHUB_SHA. Signed with: ${{ steps.signing.outputs.signed }}. Free, no ads, no tracking."
 
+      # Google Play (fastlane). Runs only when BOTH the upload keystore and the Play
+      # service-account secret exist, and only for pushes to main. Uploads to the
+      # Internal testing track; promoting further is a deliberate manual step
+      # (Actions > "Play: promote release"). See MOBILE.md.
+      - uses: ruby/setup-ruby@v1
+        if: env.HAS_PLAY_KEY == 'true' && steps.signing.outputs.release_signed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          ruby-version: "3.3"
+      - name: Upload to Google Play (internal track)
+        if: env.HAS_PLAY_KEY == 'true' && steps.signing.outputs.release_signed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: frontend/android
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_RELEASE_STATUS: ${{ vars.PLAY_RELEASE_STATUS || 'draft' }}
+        run: |
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play.json"
+          export PLAY_JSON_KEY_FILE="$RUNNER_TEMP/play.json"
+          gem install fastlane -N
+          fastlane android internal
+          rm -f "$RUNNER_TEMP/play.json"
+
   ios:
     name: iOS (simulator build, unsigned)
     runs-on: macos-15
@@ -106,6 +136,11 @@ jobs:
         working-directory: frontend
       - run: npm run build:mobile
         working-directory: frontend
+        env:
+          # Repository *variables* (Settings > Secrets and variables > Actions > Variables).
+          # These are baked into the app, so the store build needs its own copy.
+          NEXT_PUBLIC_SUPPORT_EMAIL: ${{ vars.NEXT_PUBLIC_SUPPORT_EMAIL }}
+          NEXT_PUBLIC_WEB_URL: ${{ vars.NEXT_PUBLIC_WEB_URL }}
       - name: Build for simulator
         working-directory: frontend/ios/App
         run: |
