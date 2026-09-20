@@ -96,7 +96,7 @@ jobs:
       # Rolling public download (no GitHub login needed):
       # https://github.com/<owner>/<repo>/releases/download/latest-apk/inferno-words.apk
       - name: Publish to the "latest-apk" release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -110,11 +110,11 @@ jobs:
       # Internal testing track; promoting further is a deliberate manual step
       # (Actions > "Play: promote release"). See MOBILE.md.
       - uses: ruby/setup-ruby@v1
-        if: env.HAS_PLAY_KEY == 'true' && steps.signing.outputs.release_signed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: env.HAS_PLAY_KEY == 'true' && steps.signing.outputs.release_signed == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:
           ruby-version: "3.3"
       - name: Upload to Google Play (internal track)
-        if: env.HAS_PLAY_KEY == 'true' && steps.signing.outputs.release_signed == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: env.HAS_PLAY_KEY == 'true' && steps.signing.outputs.release_signed == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         working-directory: frontend/android
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
