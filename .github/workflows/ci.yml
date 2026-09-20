@@ -31,7 +31,7 @@ jobs:
         working-directory: frontend
 
   android:
-    name: Android (debug APK)
+    name: Android (release APK + AAB)
     runs-on: ubuntu-latest
     permissions:
       contents: write # publishes the test APK as a release asset
@@ -50,22 +50,47 @@ jobs:
         working-directory: frontend
       - run: npm run build:mobile
         working-directory: frontend
-      - run: bash ./gradlew assembleDebug --no-daemon
+      # Optional repo secrets for a Play-ready build: ANDROID_KEYSTORE_BASE64,
+      # ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD (see MOBILE.md).
+      # Without them the release APK is signed with the debug key (sideload only).
+      - name: Prepare signing
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "signed=release key" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=debug key (sideload/testing only, not for Google Play)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build production (release) APK and AAB
         working-directory: frontend/android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash ./gradlew assembleRelease bundleRelease --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: inferno-words-debug-apk
-          path: frontend/android/app/build/outputs/apk/debug/*.apk
+          name: inferno-words-android
+          path: |
+            frontend/android/app/build/outputs/apk/release/*.apk
+            frontend/android/app/build/outputs/bundle/release/*.aab
       # Rolling public download (no GitHub login needed):
-      # https://github.com/<owner>/<repo>/releases/download/latest-apk/inferno-words-debug.apk
-      - name: Publish APK to the "latest-apk" release
+      # https://github.com/<owner>/<repo>/releases/download/latest-apk/inferno-words.apk
+      - name: Publish to the "latest-apk" release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp frontend/android/app/build/outputs/apk/debug/app-debug.apk inferno-words-debug.apk
+          cp frontend/android/app/build/outputs/apk/release/app-release.apk inferno-words.apk
+          cp frontend/android/app/build/outputs/bundle/release/app-release.aab inferno-words.aab
           gh release delete latest-apk --yes --cleanup-tag || true
-          gh release create latest-apk inferno-words-debug.apk             --prerelease --target "$GITHUB_SHA"             --title "Latest test APK (debug)"             --notes "Automatic debug build of commit $GITHUB_SHA. Test ads only, store disabled. Not for distribution."
+          gh release create latest-apk inferno-words.apk inferno-words.aab             --latest --target "$GITHUB_SHA"             --title "Inferno Words 1.0.${{ github.run_number }} (Android)"             --notes "Production (release) build of commit $GITHUB_SHA. Signed with: ${{ steps.signing.outputs.signed }}. Free, no ads, no tracking."
 
   ios:
     name: iOS (simulator build, unsigned)

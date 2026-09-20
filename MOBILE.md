@@ -23,9 +23,28 @@ npm run build:mobile
 ```
 
 Then `npx cap open android` (Android Studio, **JDK 21**) or, on a Mac,
-`npx cap open ios` (Xcode 16+). Every push to `main` also builds a debug APK in
-GitHub Actions and publishes it at
-`https://github.com/<owner>/<repo>/releases/download/latest-apk/inferno-words-debug.apk`.
+`npx cap open ios` (Xcode 16+).
+
+Every push to `main` builds the **production (release) APK and AAB** in GitHub Actions
+and publishes them to the repo's Releases (no login needed):
+`https://github.com/<owner>/<repo>/releases/download/latest-apk/inferno-words.apk`
+
+**Signing.** Until you add a keystore, release builds are signed with a throwaway debug
+key: installable by anyone, but not accepted by Google Play, and each new build must be
+installed after uninstalling the previous one (the key changes per build). To sign
+properly, create an upload keystore once (Android Studio > Build > Generate Signed
+Bundle, or `keytool`), then add these repository secrets
+(GitHub > Settings > Secrets and variables > Actions):
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 your-upload-key.jks` |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
+| `ANDROID_KEY_ALIAS` | key alias |
+| `ANDROID_KEY_PASSWORD` | key password |
+
+From then on the published APK updates in place and the `.aab` can be uploaded to Play.
+Keep the keystore file and passwords backed up and out of the repo.
 
 ## Donations and the stores
 
