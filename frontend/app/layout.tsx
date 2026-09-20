@@ -1,12 +1,13 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
+import { APP_NAME, APP_TAGLINE } from '@/lib/appConfig'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Taboo - Multiplayer Word Guessing Game',
-  description: 'Play Taboo with friends online!',
+  title: `${APP_NAME} - Multiplayer Word Guessing Game`,
+  description: `${APP_NAME}: ${APP_TAGLINE}. Play with friends online, no sign-up.`,
 }
 
 export const viewport = {
@@ -14,6 +15,7 @@ export const viewport = {
   initialScale: 0.9,
   maximumScale: 1.0,
   userScalable: true,
+  viewportFit: 'cover',
 }
 
 export default function RootLayout({

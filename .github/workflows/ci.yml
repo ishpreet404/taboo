@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web (types, P2P smoke test, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npx tsc --noEmit
+        working-directory: frontend
+      - run: npm run test:p2p
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  android:
+    name: Android (debug APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build:mobile
+        working-directory: frontend
+      - run: bash ./gradlew assembleDebug --no-daemon
+        working-directory: frontend/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inferno-words-debug-apk
+          path: frontend/android/app/build/outputs/apk/debug/*.apk
+
+  ios:
+    name: iOS (simulator build, unsigned)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build:mobile
+        working-directory: frontend
+      - name: Build for simulator
+        working-directory: frontend/ios/App
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build | tail -40

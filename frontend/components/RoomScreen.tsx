@@ -1,25 +1,28 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { ChevronDown, Users, Wifi, WifiOff } from 'lucide-react'
-import { useState } from 'react'
+import { APP_NAME, displayPackName, PUBLISHER_NAME } from '@/lib/appConfig'
+import { onInviteLink, roomCodeFromUrl } from '@/lib/native/device'
+import { ChevronDown, Crown, Lock, Users, Wifi, WifiOff } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
+import { useMonetization } from './MonetizationContext'
 
 // Word pack options for room creation
 export const WORD_PACKS = [
-  { key: 'standard', name: 'Taboo - Standard', description: 'Easy + Medium + Hard mix', color: 'from-blue-500 to-blue-600', tags: ['EN'] },
-  { key: 'difficult', name: 'Taboo - Difficult', description: 'All difficulties including Insane', color: 'from-purple-500 to-purple-600', tags: ['EN'] },
-  { key: 'intense', name: 'Taboo - Intense', description: 'Hard + Insane only - Max challenge!', color: 'from-pink-500 to-rose-600', tags: ['EN'] },
-  { key: 'easy', name: 'Taboo - Easy', description: 'Easy words only (5-12 pts)', color: 'from-green-500 to-green-600', tags: ['EN'] },
-  { key: 'medium', name: 'Taboo - Medium', description: 'Medium words only (13-25 pts)', color: 'from-yellow-500 to-yellow-600', tags: ['EN'] },
-  { key: 'hard', name: 'Taboo - Hard', description: 'Hard words only (26-40 pts)', color: 'from-orange-500 to-orange-600', tags: ['EN'] },
-  { key: 'insane', name: 'Taboo - Insane', description: 'Insane words only (41-60 pts)', color: 'from-red-500 to-red-600', tags: ['EN'] },
+  { key: 'standard', name: 'Standard', description: 'Easy + Medium + Hard mix', color: 'from-blue-500 to-blue-600', tags: ['EN'] },
+  { key: 'difficult', name: 'Difficult', description: 'All difficulties including Insane', color: 'from-purple-500 to-purple-600', tags: ['EN'] },
+  { key: 'intense', name: 'Intense', description: 'Hard + Insane only - Max challenge!', color: 'from-pink-500 to-rose-600', tags: ['EN'] },
+  { key: 'easy', name: 'Easy', description: 'Easy words only (5-12 pts)', color: 'from-green-500 to-green-600', tags: ['EN'] },
+  { key: 'medium', name: 'Medium', description: 'Medium words only (13-25 pts)', color: 'from-yellow-500 to-yellow-600', tags: ['EN'] },
+  { key: 'hard', name: 'Hard', description: 'Hard words only (26-40 pts)', color: 'from-orange-500 to-orange-600', tags: ['EN'] },
+  { key: 'insane', name: 'Insane', description: 'Insane words only (41-60 pts)', color: 'from-red-500 to-red-600', tags: ['EN'] },
 
   // Hindi packs (use wordDatabase.json keys: hindi_easy, hindi_medium, hindi_hard)
-  { key: 'hindi', name: 'Taboo - Hindi', description: 'Mix of Hindi Easy + Medium + Hard', color: 'from-blue-500 to-red-500', tags: ['HI'] },
-  { key: 'hindi_easy', name: 'Taboo - Hindi (Easy)', description: 'Hindi Easy words', color: 'from-green-500 to-green-600', tags: ['HI'] },
-  { key: 'hindi_medium', name: 'Taboo - Hindi (Medium)', description: 'Hindi Medium words', color: 'from-yellow-500 to-yellow-600', tags: ['HI'] },
-  { key: 'hindi_hard', name: 'Taboo - Hindi (Hard)', description: 'Hindi Hard words', color: 'from-orange-500 to-orange-600', tags: ['HI'] },
+  { key: 'hindi', name: 'Hindi', description: 'Mix of Hindi Easy + Medium + Hard', color: 'from-blue-500 to-red-500', tags: ['HI'] },
+  { key: 'hindi_easy', name: 'Hindi (Easy)', description: 'Hindi Easy words', color: 'from-green-500 to-green-600', tags: ['HI'] },
+  { key: 'hindi_medium', name: 'Hindi (Medium)', description: 'Hindi Medium words', color: 'from-yellow-500 to-yellow-600', tags: ['HI'] },
+  { key: 'hindi_hard', name: 'Hindi (Hard)', description: 'Hindi Hard words', color: 'from-orange-500 to-orange-600', tags: ['HI'] },
 ]
 
 export default function RoomScreen() {
@@ -29,6 +32,20 @@ export default function RoomScreen() {
   const [code, setCode] = useState('')
   const [selectedWordPack, setSelectedWordPack] = useState('standard')
   const [showWordPackDropdown, setShowWordPackDropdown] = useState(false)
+  const { isPackLocked, openStore, native } = useMonetization()
+
+  // Invite links (?room=CODE) drop the player straight into the join form
+  useEffect(() => {
+    const prefill = (roomCode: string) => {
+      setCode(roomCode)
+      setMode('join')
+    }
+    const fromUrl = roomCodeFromUrl()
+    if (fromUrl) prefill(fromUrl)
+    let unsubscribe = () => {}
+    onInviteLink(prefill).then((off) => (unsubscribe = off))
+    return () => unsubscribe()
+  }, [])
 
   const handleCreateRoom = (e: React.FormEvent) => {
     e.preventDefault()
@@ -59,7 +76,7 @@ export default function RoomScreen() {
             transition={{ type: 'spring', stiffness: 200 }}
             className="flex justify-center mb-4"
           >
-            <img src="/logo.png" alt="Taboo Logo" className="w-32 h-32 md:w-40 md:h-40" />
+            <img src="/logo.png" alt={`${APP_NAME} logo`} className="w-32 h-32 md:w-40 md:h-40" />
           </motion.div>
           <motion.h1
             initial={{ scale: 0.5 }}
@@ -67,9 +84,9 @@ export default function RoomScreen() {
             transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
             className="text-4xl md:text-6xl font-bold mb-3 md:mb-4 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent"
           >
-            TABOO
+            {APP_NAME.toUpperCase()}
           </motion.h1>
-          <p className="text-gray-300 text-base md:text-lg">Made by Ishpreet
+          <p className="text-gray-300 text-base md:text-lg">Made by {PUBLISHER_NAME}
           </p>
 
           {/* Connection Status */}
@@ -109,6 +126,15 @@ export default function RoomScreen() {
               <Users className="w-5 h-5" />
               Join Existing Room
             </button>
+            {native && (
+              <button
+                onClick={openStore}
+                className="w-full py-3 px-6 bg-white/10 hover:bg-white/20 border border-yellow-500/30 rounded-xl font-semibold text-yellow-300 transition-all flex items-center justify-center gap-3 text-sm md:text-base"
+              >
+                <Crown className="w-5 h-5" />
+                Store
+              </button>
+            )}
           </motion.div>
         )}
 
@@ -142,7 +168,7 @@ export default function RoomScreen() {
                   onClick={() => setShowWordPackDropdown(!showWordPackDropdown)}
                   className={`w-full px-4 py-3 bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} rounded-xl font-semibold text-white transition-all flex items-center justify-between text-sm md:text-base`}
                 >
-                  <span>{WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Taboo - Standard'}</span>
+                  <span>{displayPackName(WORD_PACKS.find(p => p.key === selectedWordPack)?.name) || 'Standard'}</span>
                   <ChevronDown className={`w-5 h-5 transition-transform ${showWordPackDropdown ? 'rotate-180' : ''}`} />
                 </button>
 
@@ -161,13 +187,17 @@ export default function RoomScreen() {
                         key={pack.key}
                         type="button"
                         onClick={() => {
-                          setSelectedWordPack(pack.key)
                           setShowWordPackDropdown(false)
+                          if (isPackLocked(pack.key)) return openStore()
+                          setSelectedWordPack(pack.key)
                         }}
                         className={`w-full px-4 py-2.5 text-left hover:bg-white/10 transition-all flex flex-col ${selectedWordPack === pack.key ? 'bg-white/15' : ''}`}
                       >
-                        <span className={`font-semibold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent text-sm`}>
-                          {pack.name}
+                        <span className="flex items-center gap-2">
+                          <span className={`font-semibold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent text-sm`}>
+                            {displayPackName(pack.name)}
+                          </span>
+                          {isPackLocked(pack.key) && <Lock className="w-3.5 h-3.5 text-yellow-400" aria-label="Premium pack" />}
                         </span>
                         <span className="text-xs text-gray-400">{pack.description}</span>
                       </button>
@@ -252,7 +282,12 @@ export default function RoomScreen() {
         {/* Version & Copyright */}
         <div className="mt-3 text-center">
           <p className="text-xs text-gray-400">v5.0.0</p>
-          <p className="text-xs text-gray-400">Taboo @ 2026. All rights reserved.</p>
+          <p className="text-xs text-gray-400">{APP_NAME} @ 2026. All rights reserved.</p>
+          <p className="text-xs text-gray-400 mt-1">
+            <a href="/privacy" className="underline underline-offset-2">Privacy</a>
+            {' · '}
+            <a href="/terms" className="underline underline-offset-2">Terms</a>
+          </p>
         </div>
       </motion.div>
     </div>

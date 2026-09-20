@@ -3,6 +3,8 @@
 import { useRouter } from 'next/navigation'
 import React, { createContext, ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
+import { getGameMode } from '@/lib/gameMode'
+import { createP2PSocket } from '@/lib/p2p/p2pSocket'
 
 // Temporarily silence noisy client-side console.log output in the browser.
 // Keeps console.warn and console.error intact for visibility.
@@ -202,7 +204,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000'
 
     // Keep Render service warm by pinging /health every 3.5 minutes.
-    if (!/onrender\.com/i.test(serverUrl)) return
+    // (Pointless in P2P mode - there is no server to keep awake.)
+    if (getGameMode() === 'p2p' || !/onrender\.com/i.test(serverUrl)) return
 
     const pingServer = () => {
       fetch(`${serverUrl}/health`, { cache: 'no-store' }).catch(() => { })
@@ -216,7 +219,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:3000'
-    console.log('Connecting to server:', serverUrl)
+    const p2pMode = getGameMode() === 'p2p'
+    console.log(p2pMode ? "P2P mode: games are hosted in the room creator's browser" : `Connecting to server: ${serverUrl}`)
 
     // Generate or retrieve session ID
     let sessionId = localStorage.getItem('taboo_session_id')
@@ -225,14 +229,17 @@ export function GameProvider({ children }: { children: ReactNode }) {
       localStorage.setItem('taboo_session_id', sessionId)
     }
 
-    const newSocket = io(serverUrl, {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      timeout: 20000,
-      forceNew: true, // Force new connection each time
-    })
+    // In P2P mode the "socket" is a facade over WebRTC with the same on/off/emit surface
+    const newSocket: Socket = p2pMode
+      ? (createP2PSocket(sessionId) as unknown as Socket)
+      : io(serverUrl, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        timeout: 20000,
+        forceNew: true, // Force new connection each time
+      })
 
     // Check if there's a stored session before connecting
     const storedRoomCode = localStorage.getItem('taboo_room_code')
@@ -249,13 +256,18 @@ export function GameProvider({ children }: { children: ReactNode }) {
       console.log('✅ Connected to server, Socket ID:', newSocket.id)
       setConnected(true)
 
-      // Attempt auto-reconnect if we have stored session
-      if (hasStoredSession) {
-        console.log('🔄 Attempting to reconnect to room:', storedRoomCode)
+      // Attempt auto-reconnect if we have a stored session. Read it now rather than at
+      // mount: 'connect' also fires after a mid-game connection drop, by which point
+      // the room joined this session is the one to restore.
+      const currentRoomCode = localStorage.getItem('taboo_room_code')
+      const currentPlayerName = localStorage.getItem('taboo_player_name')
+      const currentSessionId = localStorage.getItem('taboo_session_id')
+      if (currentRoomCode && currentPlayerName && currentSessionId) {
+        console.log('🔄 Attempting to reconnect to room:', currentRoomCode)
         newSocket.emit('reconnect-session', {
-          roomCode: storedRoomCode,
-          playerName: storedPlayerName,
-          sessionId: storedSessionId
+          roomCode: currentRoomCode,
+          playerName: currentPlayerName,
+          sessionId: currentSessionId
         })
       }
     })
