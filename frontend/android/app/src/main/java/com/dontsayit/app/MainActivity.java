@@ -1,4 +1,4 @@
-package com.infernowords.app;
+package com.dontsayit.app;
 
 import android.os.Bundle;
 import android.view.View;

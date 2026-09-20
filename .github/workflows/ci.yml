@@ -89,21 +89,21 @@ jobs:
         run: bash ./gradlew assembleRelease bundleRelease --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: inferno-words-android
+          name: dontsayit-android
           path: |
             frontend/android/app/build/outputs/apk/release/*.apk
             frontend/android/app/build/outputs/bundle/release/*.aab
       # Rolling public download (no GitHub login needed):
-      # https://github.com/<owner>/<repo>/releases/download/latest-apk/inferno-words.apk
+      # https://github.com/<owner>/<repo>/releases/download/latest-apk/dontsayit.apk
       - name: Publish to the "latest-apk" release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp frontend/android/app/build/outputs/apk/release/app-release.apk inferno-words.apk
-          cp frontend/android/app/build/outputs/bundle/release/app-release.aab inferno-words.aab
+          cp frontend/android/app/build/outputs/apk/release/app-release.apk dontsayit.apk
+          cp frontend/android/app/build/outputs/bundle/release/app-release.aab dontsayit.aab
           gh release delete latest-apk --yes --cleanup-tag || true
-          gh release create latest-apk inferno-words.apk inferno-words.aab             --latest --target "$GITHUB_SHA"             --title "Inferno Words 1.0.${{ github.run_number }} (Android)"             --notes "Production (release) build of commit $GITHUB_SHA. Signed with: ${{ steps.signing.outputs.signed }}. Free, no ads, no tracking."
+          gh release create latest-apk dontsayit.apk dontsayit.aab             --latest --target "$GITHUB_SHA"             --title "Don't Say It 1.0.${{ github.run_number }} (Android)"             --notes "Production (release) build of commit $GITHUB_SHA. Signed with: ${{ steps.signing.outputs.signed }}. Free, no ads, no tracking."
 
       # Google Play (fastlane). Runs only when BOTH the upload keystore and the Play
       # service-account secret exist, and only for pushes to main. Uploads to the

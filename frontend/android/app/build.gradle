@@ -7,10 +7,10 @@ def releaseKeystore = System.getenv("ANDROID_KEYSTORE_FILE")
 def hasReleaseKeystore = releaseKeystore != null && !releaseKeystore.isEmpty() && file(releaseKeystore).exists()
 
 android {
-    namespace = "com.infernowords.app"
+    namespace = "com.dontsayit.app"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.infernowords.app"
+        applicationId "com.dontsayit.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // CI passes the run number so every published build can update the previous one

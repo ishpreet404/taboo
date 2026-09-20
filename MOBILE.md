@@ -1,4 +1,4 @@
-# Android & iOS apps ("Inferno Words")
+# Android & iOS apps ("Don't Say It")
 
 The apps are the same Next.js frontend, statically exported and wrapped with
 [Capacitor 8](https://capacitorjs.com). They always run in serverless P2P mode
@@ -27,7 +27,7 @@ Then `npx cap open android` (Android Studio, **JDK 21**) or, on a Mac,
 
 Every push to `main` builds the **production (release) APK and AAB** in GitHub Actions
 and publishes them to the repo's Releases (no login needed):
-`https://github.com/<owner>/<repo>/releases/download/latest-apk/inferno-words.apk`
+`https://github.com/<owner>/<repo>/releases/download/latest-apk/dontsayit.apk`
 
 **Signing.** Until you add a keystore, release builds are signed with a throwaway debug
 key: installable by anyone, but not accepted by Google Play, and each new build must be
@@ -80,7 +80,7 @@ later want in-app support, do it with a consumable "Tip" IAP.
 
 1. **Accounts**: Google Play Console ($25 once), Apple Developer ($99/yr).
 2. **Identity**: set `NEXT_PUBLIC_SUPPORT_EMAIL` on the website (shown on `/privacy`
-   and `/terms`). To change the bundle id `com.infernowords.app`, edit
+   and `/terms`). To change the bundle id `com.dontsayit.app`, edit
    `capacitor.config.ts`, `android/app/build.gradle` and the Xcode target **before the
    first upload** - it is permanent afterwards.
 3. **Icons & splash**: add a 1024x1024 `assets/icon.png` and run `npx @capacitor/assets generate`.
@@ -105,7 +105,7 @@ Verified against the published release APK (`aapt2 dump`), 2026-09:
 | Data safety | OK | No analytics/ads SDKs, no accounts. See the form answers below |
 | Privacy policy | **Action** | `/privacy` is live, but the contact address is a placeholder until you set `NEXT_PUBLIC_SUPPORT_EMAIL` |
 | User-generated content | OK | Nicknames + custom packs: terms with zero tolerance, in-app **Report a player or content**, host kick + ban, leave any time |
-| Intellectual property | OK in-app | Store build shows "Inferno Words" and says "Foul" for rule breaks; no trademarked word in UI. **Do not use "Taboo" in the listing title, description, screenshots or keywords.** The default site URL still contains it: set `NEXT_PUBLIC_WEB_URL` to a neutral domain before launch |
+| Intellectual property | OK in-app | Store build shows "Don't Say It" and says "Foul" for rule breaks; no trademarked word in UI. **Do not use "Taboo" in the listing title, description, screenshots or keywords.** The default site URL still contains it: set `NEXT_PUBLIC_WEB_URL` to a neutral domain before launch |
 | In-app review | OK | Uses the current `com.google.android.play:review` library |
 | App icon / listing assets | **Action** | Still the default Capacitor icon. Provide your own 512px icon, feature graphic and screenshots |
 | Signing | **Action** | Add the keystore secrets (above) so the AAB is signed with your upload key |
