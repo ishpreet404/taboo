@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <!-- Android resources need the apostrophe escaped -->
-    <string name="app_name">Don\'t Say It</string>
-    <string name="title_activity_main">Don\'t Say It</string>
+    <string name="app_name">Don\'t Say it!</string>
+    <string name="title_activity_main">Don\'t Say it!</string>
     <string name="package_name">com.dontsayit.app</string>
     <string name="custom_url_scheme">com.dontsayit.app</string>
     <string name="invite_link_host">taboo-inferno.vercel.app</string>

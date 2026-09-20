@@ -4,7 +4,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 // then `npx cap sync`) BEFORE the first upload if you want a different one.
 const config: CapacitorConfig = {
   appId: 'com.dontsayit.app',
-  appName: "Don't Say It",
+  appName: "Don't Say it!",
   webDir: 'out',
   // The UI is laid out 1:1 for the screen; pinch/double-tap zoom only breaks it
   zoomEnabled: false,

@@ -7,7 +7,7 @@ const env = {
   ...process.env,
   NEXT_OUTPUT: 'export',
   NEXT_PUBLIC_GAME_MODE: 'p2p',
-  NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME || "Don't Say It",
+  NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME || "Don't Say it!",
 }
 
 for (const [cmd, args] of [

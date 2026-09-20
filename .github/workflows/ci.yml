@@ -103,7 +103,7 @@ jobs:
           cp frontend/android/app/build/outputs/apk/release/app-release.apk dontsayit.apk
           cp frontend/android/app/build/outputs/bundle/release/app-release.aab dontsayit.aab
           gh release delete latest-apk --yes --cleanup-tag || true
-          gh release create latest-apk dontsayit.apk dontsayit.aab             --latest --target "$GITHUB_SHA"             --title "Don't Say It 1.0.${{ github.run_number }} (Android)"             --notes "Production (release) build of commit $GITHUB_SHA. Signed with: ${{ steps.signing.outputs.signed }}. Free, no ads, no tracking."
+          gh release create latest-apk dontsayit.apk dontsayit.aab             --latest --target "$GITHUB_SHA"             --title "Don't Say it! 1.0.${{ github.run_number }} (Android)"             --notes "Production (release) build of commit $GITHUB_SHA. Signed with: ${{ steps.signing.outputs.signed }}. Free, no ads, no tracking."
 
       # Google Play (fastlane). Runs only when BOTH the upload keystore and the Play
       # service-account secret exist, and only for pushes to main. Uploads to the

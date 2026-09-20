@@ -1,4 +1,4 @@
-# Android & iOS apps ("Don't Say It")
+# Android & iOS apps ("Don't Say it!")
 
 The apps are the same Next.js frontend, statically exported and wrapped with
 [Capacitor 8](https://capacitorjs.com). They always run in serverless P2P mode
@@ -105,7 +105,7 @@ Verified against the published release APK (`aapt2 dump`), 2026-09:
 | Data safety | OK | No analytics/ads SDKs, no accounts. See the form answers below |
 | Privacy policy | **Action** | `/privacy` is live, but the contact address is a placeholder until you set `NEXT_PUBLIC_SUPPORT_EMAIL` |
 | User-generated content | OK | Nicknames + custom packs: terms with zero tolerance, in-app **Report a player or content**, host kick + ban, leave any time |
-| Intellectual property | OK in-app | Store build shows "Don't Say It" and says "Foul" for rule breaks; no trademarked word in UI. **Do not use "Taboo" in the listing title, description, screenshots or keywords.** The default site URL still contains it: set `NEXT_PUBLIC_WEB_URL` to a neutral domain before launch |
+| Intellectual property | OK in-app | Store build shows "Don't Say it!" and says "Foul" for rule breaks; no trademarked word in UI. **Do not use "Taboo" in the listing title, description, screenshots or keywords.** The default site URL still contains it: set `NEXT_PUBLIC_WEB_URL` to a neutral domain before launch |
 | In-app review | OK | Uses the current `com.google.android.play:review` library |
 | App icon / listing assets | **Action** | Still the default Capacitor icon. Provide your own 512px icon, feature graphic and screenshots |
 | Signing | **Action** | Add the keystore secrets (above) so the AAB is signed with your upload key |

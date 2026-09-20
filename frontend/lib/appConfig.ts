@@ -8,7 +8,7 @@ const env = (value: string | undefined, fallback: string) => (value && value.tri
 export const APP_NAME = env(process.env.NEXT_PUBLIC_APP_NAME, 'Taboo')
 // The legal pages are the ones linked from the store listings, so they always carry
 // the store name, whatever the website calls itself.
-export const LEGAL_APP_NAME = env(process.env.NEXT_PUBLIC_LEGAL_APP_NAME, "Don't Say It")
+export const LEGAL_APP_NAME = env(process.env.NEXT_PUBLIC_LEGAL_APP_NAME, "Don't Say it!")
 // What the game calls breaking the describing rules. "Taboo" is only used when the
 // product itself is branded that way; store builds say "Foul" so no trademarked word
 // appears anywhere in the app or its screenshots.
