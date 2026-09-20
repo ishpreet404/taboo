@@ -55,6 +55,11 @@ host and redeploy.
 - **Words live on the host's device.** Only the host downloads the word
   database, but a host who opens dev tools could peek. Fine for friends.
 - **Kick bans are per browser** (session id) instead of per IP.
+- **Trust model.** The host's device is the referee. The core validates every event
+  (sender, team, dealt word, point cap), rate-limits each connection, caps message
+  sizes and player counts, and never sends other players' session ids, upcoming words
+  or ban lists over the wire. What it cannot stop is a *host* cheating in their own
+  room (they hold the words) - the same as a friend peeking at the cards.
 - **Strict networks.** WebRTC needs STUN/TURN to cross NATs. PeerJS ships free
   defaults, which cover most home/mobile networks. If some players can't
   connect, add your own TURN server (Cloudflare Calls and metered.ca have free

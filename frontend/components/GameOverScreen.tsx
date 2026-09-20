@@ -2,11 +2,12 @@
 
 import { motion } from 'framer-motion'
 import { getMode } from '@/lib/game/packCatalog'
-import { hapticTap } from '@/lib/native/device'
+import { hapticTap, isNative } from '@/lib/native/device'
 import { shareResultsCard } from '@/lib/native/resultsCard'
 import { recordGameFinished } from '@/lib/native/review'
-import { AlertTriangle, Home, Medal, RotateCw, Share2, Star, Trophy } from 'lucide-react'
+import { AlertTriangle, Heart, Home, Medal, RotateCw, Share2, Star, Trophy } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import DonateModal from './DonateModal'
 import { useGame } from './GameContext'
 import { packDisplayName } from './PackList'
 
@@ -22,6 +23,9 @@ interface PlayerContribution {
 export default function GameOverScreen() {
   const { gameState, leaveGame, socket, roomCode, localPlayerPlayAgain, myTeam, selectedWordPack, customPackName, setNotification } = useGame()
   const [sharing, setSharing] = useState(false)
+  const [showDonate, setShowDonate] = useState(false)
+  const [canDonate, setCanDonate] = useState(false) // website only, see MOBILE.md
+  useEffect(() => setCanDonate(!isNative()), [])
 
   // Get taboo deductions per team
   const tabooDeductionsByTeam = gameState.confirmedTaboosByTeam || {}
@@ -249,6 +253,15 @@ export default function GameOverScreen() {
         transition={{ delay: 0.6 }}
         className="text-center"
       >
+        {canDonate && (
+          <button
+            onClick={() => setShowDonate(true)}
+            className="mb-5 inline-flex items-center gap-2 text-sm text-pink-300 hover:text-pink-200 underline underline-offset-4"
+          >
+            <Heart className="w-4 h-4" /> Had fun? Donate to keep the game free
+          </button>
+        )}
+        <DonateModal open={showDonate} onClose={() => setShowDonate(false)} />
         <div className="flex flex-wrap items-center justify-center gap-4">
           <button
             onClick={handleShareResults}

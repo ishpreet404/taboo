@@ -146,6 +146,10 @@ function hideRoomSecrets(room) {
 		value() {
 			const publicRoom = { ...this };
 			for (const field of ROOM_SECRET_FIELDS) delete publicRoom[field];
+			// Session ids are what prove seat ownership: never send them to other players
+			if (Array.isArray(publicRoom.players)) {
+				publicRoom.players = publicRoom.players.map(({ sessionId, ...player }) => player);
+			}
 			return publicRoom;
 		},
 		enumerable: false,
@@ -1514,11 +1518,87 @@ function generateRoomCode() {
 	return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
+// ---------------------------------------------------------------------------
+// Input hardening shared by every event handler
+// ---------------------------------------------------------------------------
+const RATE_LIMIT = { windowMs: 1000, maxEvents: 40 }; // per socket
+const MAX_NAME_LENGTH = 20;
+
+// Player-chosen names are shown to everyone in the room
+function cleanName(raw) {
+	if (typeof raw !== "string") return "";
+	return raw
+		.replace(/[\u0000-\u001f\u007f<>]/g, "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, MAX_NAME_LENGTH);
+}
+
+// Wraps socket.on so that, for every client event:
+//  - the payload is always a plain object (handlers destructure it; "undefined"
+//    used to throw, and an uncaught throw takes the whole Node server down)
+//  - a flooding client is ignored instead of starving the room
+//  - a bug in one handler can never crash the process / the host's tab
+function hardenSocket(socket) {
+	const rawOn = socket.on.bind(socket);
+	let windowStart = Date.now();
+	let eventsInWindow = 0;
+
+	socket.on = (event, handler) =>
+		rawOn(event, (...args) => {
+			if (event !== "disconnect") {
+				const now = Date.now();
+				if (now - windowStart > RATE_LIMIT.windowMs) {
+					windowStart = now;
+					eventsInWindow = 0;
+				}
+				if (++eventsInWindow > RATE_LIMIT.maxEvents) return;
+
+				const payload = args[0];
+				if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+					args[0] = {};
+				} else {
+					if (typeof payload.roomCode === "string") {
+						payload.roomCode = payload.roomCode.trim().toUpperCase().slice(0, 12);
+					}
+					if ("playerName" in payload) payload.playerName = cleanName(payload.playerName);
+					if ("sessionId" in payload) {
+						payload.sessionId =
+							typeof payload.sessionId === "string" ? payload.sessionId.slice(0, 80) : null;
+					}
+				}
+			}
+			try {
+				return handler(...args);
+			} catch (error) {
+				console.error(`Handler "${event}" failed:`, error);
+			}
+		});
+}
+
+// A seat belongs to the device (session) that took it. Without this, anyone who
+// knows a room code and a player's name could take over that player - or the host.
+// Player object as other clients may see it
+function publicPlayer(player) {
+	const { sessionId, ...visible } = player;
+	return visible;
+}
+
+function ownsSeat(player, sessionId) {
+	if (!player.sessionId) return true; // legacy seats created without a session
+	return typeof sessionId === "string" && sessionId === player.sessionId;
+}
+
 function onConnection(socket) {
+	hardenSocket(socket);
 	console.log("User connected:", socket.id);
 
 	// Create a new room
 	socket.on("create-room", (data) => {
+		if (!data.playerName) {
+			socket.emit("error", { message: "Please enter a name" });
+			return;
+		}
 		const roomCode = (roomCodeOverride || generateRoomCode)();
 		const wordPack =
 			data.wordPack && WORD_PACKS[data.wordPack] ? data.wordPack : "standard";
@@ -1591,10 +1671,11 @@ function onConnection(socket) {
 			return;
 		}
 
-		// Find player by sessionId or name
+		// Find the seat by session; a name match only counts if the session owns it
 		const existingPlayer = room.players.find(
 			(p) =>
-				(p.sessionId && p.sessionId === sessionId) || p.name === playerName,
+				(p.sessionId && p.sessionId === sessionId) ||
+				(p.name === playerName && ownsSeat(p, sessionId)),
 		);
 
 		// Also check disconnected players waiting for reconnection
@@ -1701,6 +1782,13 @@ function onConnection(socket) {
 		// Check if player already exists (reconnection)
 		const existingPlayer = room.players.find((p) => p.name === playerName);
 
+		if (existingPlayer && !ownsSeat(existingPlayer, sessionId)) {
+			socket.emit("error", {
+				message: "That name is already taken in this room. Please pick another.",
+			});
+			return;
+		}
+
 		if (existingPlayer) {
 			// Rejoining cancels any pending removal from an earlier disconnect
 			const pendingRemoval = room.disconnectedPlayers?.get(playerName);
@@ -1762,7 +1850,7 @@ function onConnection(socket) {
 					tabooVoting: room.tabooVoting || false,
 				});
 				io.to(roomCode).emit("player-joined", {
-					player: existingPlayer,
+					player: publicPlayer(existingPlayer),
 					room,
 					teamCount: room.teamCount || 2,
 				});
@@ -1791,7 +1879,7 @@ function onConnection(socket) {
 				teamCount: room.gameState?.teamCount || 2,
 			});
 			io.to(roomCode).emit("player-joined-midgame", {
-				player: newPlayer,
+				player: publicPlayer(newPlayer),
 				room,
 			});
 			console.log(`Player ${playerName} joined mid-game in room: ${roomCode}`);
@@ -1805,7 +1893,7 @@ function onConnection(socket) {
 				tabooVoting: room.tabooVoting || false,
 			});
 			io.to(roomCode).emit("player-joined", {
-				player: newPlayer,
+				player: publicPlayer(newPlayer),
 				room,
 				teamCount: room.teamCount || 2,
 			});
@@ -2303,11 +2391,22 @@ function onConnection(socket) {
 
 	// Word guessed
 	socket.on("word-guessed", (data) => {
-		const { roomCode, word, wordObj, guesser, points } = data;
+		const { roomCode } = data;
+		let { word, wordObj, guesser, points } = data;
 		const room = gameRooms.get(roomCode);
 
 		if (room && room.gameState) {
 			const gs = room.gameState;
+
+			// Authoritative checks: the sender must be a player on the team whose turn
+			// it is, the word must be one actually in play, and it can never be worth
+			// more than the dealt value (partial matches legitimately score less).
+			const sender = room.players.find((p) => p.id === socket.id);
+			const dealt = (gs.currentWords || []).find((w) => w.word === word);
+			if (!sender || !dealt || sender.team !== gs.currentTeamIndex) return;
+			guesser = sender.name;
+			points = Math.min(Math.max(0, Math.round(Number(points) || 0)), dealt.points);
+			wordObj = { ...dealt, points };
 
 			// Validate guess timing with grace period
 			// Allow guesses during grace period even if turnActive is false (for last-second guesses)

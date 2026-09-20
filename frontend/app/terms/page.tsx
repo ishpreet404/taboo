@@ -35,12 +35,11 @@ export default function TermsPage() {
         the room ends. We do not guarantee that a connection between any two devices or networks can be established.
       </p>
 
-      <h2>3. Purchases</h2>
+      <h2>3. Free to play, donations optional</h2>
       <p>
-        Optional one-time purchases (such as &quot;Remove Ads&quot; and &quot;Premium Word Packs&quot;) are sold
-        through Google Play or the Apple App Store and are subject to their terms, including their refund policies.
-        Purchases are tied to your store account and can be restored from the Store screen. Premium word packs apply
-        to rooms you host.
+        The Game is free and everything in it is unlocked. The website offers an optional way to donate to the
+        publisher. Donations are voluntary gifts: they are not purchases, unlock nothing, and are non-refundable except
+        where the law requires otherwise.
       </p>
 
       <h2>4. Intellectual property</h2>

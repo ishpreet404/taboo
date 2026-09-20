@@ -1,26 +1,41 @@
 // Load environment variables from .env file
 require("dotenv").config();
 
-// Standalone Express + Socket.IO server for local development
+// Optional Socket.IO backend (server mode). The default deployment is serverless
+// P2P and does not need this process at all - see SERVERLESS.md.
 const express = require("express");
 const http = require("http");
 const socketIO = require("socket.io");
 const cors = require("cors");
-const path = require("path");
 const { google } = require("googleapis");
 
+// Browsers may only connect from these origins. Override with a comma-separated
+// ALLOWED_ORIGINS env var (e.g. your own domain) when self-hosting.
+const ALLOWED_ORIGINS = (
+	process.env.ALLOWED_ORIGINS ||
+	"https://taboo-inferno.vercel.app,http://localhost:3001,http://localhost:3000"
+)
+	.split(",")
+	.map((origin) => origin.trim())
+	.filter(Boolean);
+
 const app = express();
+app.disable("x-powered-by");
 const server = http.createServer(app);
 const io = socketIO(server, {
-	cors: {
-		origin: ["*", "http://localhost:3001", "https://taboo-inferno.vercel.app"],
-		methods: ["GET", "POST"],
-		credentials: true,
-	},
+	cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST"] },
+	// Largest legitimate message is a custom word pack (~25 KB); the 1 MB default
+	// just gives a flooder more room
+	maxHttpBufferSize: 128 * 1024,
 });
 
-app.use(cors());
-app.use(express.static("public"));
+app.use(cors({ origin: ALLOWED_ORIGINS }));
+app.use((_req, res, next) => {
+	res.setHeader("X-Content-Type-Options", "nosniff");
+	res.setHeader("X-Frame-Options", "DENY");
+	res.setHeader("Referrer-Policy", "no-referrer");
+	next();
+});
 
 // Health endpoint used by Render health checks and uptime monitoring.
 app.get("/health", (_req, res) => {

@@ -59,6 +59,11 @@ export async function sendFeedbackRows(kind: 'feedback' | 'suggestions', rows: a
 // Characters per chunk. Worst case is 3 bytes/char (Devanagari packs) plus JSON
 // escaping when PeerJS re-serialises the chunk, which stays well under the limit.
 const CHUNK_CHARS = 3500
+// Largest message a peer may send (a full custom pack is ~25 KB). Bounds the memory
+// a malicious peer can make us hold while "assembling" a message that never ends.
+const MAX_MESSAGE_CHARS = 256 * 1024
+const MAX_CHUNKS = Math.ceil(MAX_MESSAGE_CHARS / CHUNK_CHARS)
+const MAX_PARTIAL_MESSAGES = 4
 
 interface ChunkFrame {
   k: string // message id
@@ -91,10 +96,10 @@ export class FrameDecoder {
     const frame = raw as any
     if (isWireMessage(frame)) return frame
     if (!frame || typeof frame.k !== 'string' || typeof frame.d !== 'string') return null
-    if (!Number.isInteger(frame.i) || !Number.isInteger(frame.n) || frame.n < 1 || frame.n > 2000 || frame.i < 0 || frame.i >= frame.n) return null
+    if (!Number.isInteger(frame.i) || !Number.isInteger(frame.n) || frame.n < 1 || frame.n > MAX_CHUNKS || frame.d.length > CHUNK_CHARS || frame.i < 0 || frame.i >= frame.n) return null
 
     // Bound memory: a peer can't keep many half-sent messages open
-    if (!this.partial.has(frame.k) && this.partial.size >= 8) this.partial.clear()
+    if (!this.partial.has(frame.k) && this.partial.size >= MAX_PARTIAL_MESSAGES) this.partial.clear()
     const parts = this.partial.get(frame.k) || []
     parts[frame.i] = frame.d
     this.partial.set(frame.k, parts)

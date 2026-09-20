@@ -31,6 +31,26 @@ players.forEach((p, i) => p.send('join-room', { roomCode: 'TEST42', playerName: 
 assert.ok(last('a', 'room-joined') || last('a', 'player-joined'), 'joiner got a join event')
 assert.ok(last('host', 'player-joined'), 'host saw the join broadcast')
 
+// --- Security regressions ----------------------------------------------------
+// Session ids never reach other players
+assert.ok(!JSON.stringify(inbox.a).includes('s-host') && !JSON.stringify(inbox.host).includes('s-a'), 'session ids stay private')
+// Knowing a name is not enough to take a seat (join or reconnect)
+const thief = client('thief')
+thief.send('join-room', { roomCode: 'TEST42', playerName: 'Hosty', sessionId: 'stolen' })
+assert.match(last('thief', 'error')?.data.message || '', /already taken/)
+thief.send('reconnect-session', { roomCode: 'TEST42', playerName: 'Hosty', sessionId: 'stolen' })
+assert.ok(last('thief', 'reconnect-failed'), 'reconnect with a foreign session is refused')
+assert.equal(core.gameRooms.get('TEST42').host, 'host', 'host seat was not hijacked')
+// Malformed payloads are ignored instead of throwing
+for (const bad of [undefined, null, 'x', 42, []]) thief.send('join-team', bad)
+thief.send('start-game', undefined)
+// Names are cleaned and capped
+const longName = client('long')
+longName.send('join-room', { roomCode: 'test42 ', playerName: '  <b>Very</b>   Long Name That Keeps Going  ', sessionId: 's-long' })
+assert.equal(core.gameRooms.get('TEST42').players.find((p) => p.id === 'long')?.name, 'bVery/b Long Name Th')
+io.removeClient('long'); io.removeClient('thief')
+core.gameRooms.get('TEST42').players = core.gameRooms.get('TEST42').players.filter((p) => p.id !== 'long')
+
 const missing = client('lost')
 missing.send('join-room', { roomCode: 'NOPE00', playerName: 'X' })
 assert.equal(last('lost', 'error')?.data.message, 'Room not found')
@@ -72,6 +92,20 @@ assert.equal(turn.gameState.activeMultiplier, 2)
 assert.ok(!JSON.stringify(core.gameRooms.get('TEST42')).includes('INSIDE JOKE 39') || turn.words.some((w) => w.word === 'INSIDE JOKE 39'), 'custom word list is not broadcast')
 const roomBytes = JSON.stringify(core.gameRooms.get('TEST42')).length
 assert.ok(roomBytes < 8000, `room payload too large: ${roomBytes} bytes`)
+
+// Guesses are validated by the core, not trusted from the client
+const dealtWord = turn.words[0]
+players[1].send('word-guessed', { roomCode: 'TEST42', word: dealtWord.word, wordObj: dealtWord, guesser: 'Hosty', points: 99999 })
+assert.equal(core.gameRooms.get('TEST42').gameState.teams[0].score, 0, 'the other team cannot score for us')
+players[0].send('word-guessed', { roomCode: 'TEST42', word: 'NOT A DEALT WORD', guesser: 'P0', points: 50 })
+assert.equal(core.gameRooms.get('TEST42').gameState.teams[0].score, 0, 'undealt words are ignored')
+players[0].send('word-guessed', { roomCode: 'TEST42', word: dealtWord.word, wordObj: dealtWord, guesser: 'Somebody Else', points: 99999 })
+assert.equal(core.gameRooms.get('TEST42').gameState.teams[0].score, dealtWord.points, 'points are capped at the dealt value')
+assert.equal(core.gameRooms.get('TEST42').gameState.guessedByPlayer[0].guesser, 'P0', 'guesser is the sender, not a claimed name')
+// Flooding is dropped after the per-second budget
+const before = inbox.a.length
+for (let i = 0; i < 500; i++) players[2].send('timer-update', { roomCode: 'TEST42', timeRemaining: 10 })
+assert.ok(inbox.a.length - before <= 45, 'flood was rate limited')
 
 // One-to-one messages rely on every socket sitting in a room named after its id
 io.to('b').emit('direct-test', { ok: true })

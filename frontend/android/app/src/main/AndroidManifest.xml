@@ -33,10 +33,6 @@
 
         </activity>
 
-        <!-- AdMob app id (required by the Google Mobile Ads SDK at startup) -->
-        <meta-data
-            android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="@string/admob_app_id" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -52,8 +48,6 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Advertising ID, used by AdMob. Declare it in Play Console > App content too. -->
-    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
     <!-- Keeps the screen on while in a room (a sleeping host freezes the game) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 </manifest>

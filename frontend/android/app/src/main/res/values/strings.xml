@@ -4,7 +4,5 @@
     <string name="title_activity_main">Inferno Words</string>
     <string name="package_name">com.infernowords.app</string>
     <string name="custom_url_scheme">com.infernowords.app</string>
-    <!-- Google's TEST AdMob app id. Replace with your own before release. -->
-    <string name="admob_app_id">ca-app-pub-3940256099942544~3347511713</string>
     <string name="invite_link_host">taboo-inferno.vercel.app</string>
 </resources>

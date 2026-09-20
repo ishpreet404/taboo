@@ -29,7 +29,7 @@ export default function PrivacyPage() {
         </li>
         <li>
           <strong>On-device storage.</strong> A random session identifier, your last nickname and room code, and your
-          purchase status are stored on your device so you can reconnect after a dropped connection. A host&apos;s
+          chosen theme are stored on your device so you can reconnect after a dropped connection. A host&apos;s
           device also keeps a temporary copy of the room so it can recover from a reload.
         </li>
         <li>
@@ -48,25 +48,18 @@ export default function PrivacyPage() {
         </li>
       </ul>
 
-      <h2>3. Advertising (Android and iOS apps only)</h2>
+      <h2>3. No ads, no purchases, no tracking</h2>
       <p>
-        The apps show ads through Google AdMob. Google may collect and use device identifiers (such as the advertising
-        ID), IP address, approximate location derived from it, and ad interaction and diagnostic data to serve and
-        measure ads, and, where you have agreed, to personalise them. Where the law requires it, you are asked for
-        consent before any ad is requested, and you can change your choice at any time under Store &rarr; &quot;Ad
-        privacy choices&quot;. On iOS, tracking only happens if you allow it in the system prompt. See{' '}
-        <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener noreferrer">
-          how Google uses information from apps that use its services
-        </a>
-        . The &quot;Remove Ads&quot; purchase turns ads off entirely. The website shows no ads.
+        The Game shows no advertising, sells nothing, and contains no analytics or advertising SDKs. It does not use
+        advertising identifiers and does not track you across apps or websites.
       </p>
 
-      <h2>4. Purchases (apps only)</h2>
+      <h2>4. Donations (website only)</h2>
       <p>
-        Purchases are processed by Google Play or the Apple App Store. We never see your payment details. We use
-        RevenueCat to verify purchases and unlock what you bought; it receives an anonymous, randomly generated app
-        user ID and your purchase history for this app. See the{' '}
-        <a href="https://www.revenuecat.com/privacy" target="_blank" rel="noopener noreferrer">RevenueCat privacy policy</a>.
+        The website offers an optional way to support the Game through UPI. Payments are made in your own UPI app
+        directly to the publisher; the Game never sees or handles your payment details. As with any UPI transfer, the
+        recipient can see the payer name and UPI reference shown by the banking system. Donating unlocks nothing: the
+        whole Game is free either way.
       </p>
 
       <h2>5. What we do not do</h2>
@@ -78,7 +71,7 @@ export default function PrivacyPage() {
       <h2>6. Children</h2>
       <p>
         The Game is not directed to children under 13 (or the higher age required in your country), and we do not
-        knowingly collect personal information from them. Ads are not configured as child-directed. If you believe a
+        knowingly collect personal information from them. If you believe a
         child has provided personal information, contact us and we will help remove it.
       </p>
 

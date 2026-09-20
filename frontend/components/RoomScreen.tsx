@@ -3,11 +3,11 @@
 import { motion } from 'framer-motion'
 import { APP_NAME, PUBLISHER_NAME } from '@/lib/appConfig'
 import { PACKS } from '@/lib/game/packCatalog'
-import { onInviteLink, roomCodeFromUrl } from '@/lib/native/device'
-import { ChevronDown, Crown, Users, Wifi, WifiOff } from 'lucide-react'
+import { isNative, onInviteLink, roomCodeFromUrl } from '@/lib/native/device'
+import { ChevronDown, Heart, Users, Wifi, WifiOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
-import { useMonetization } from './MonetizationContext'
+import DonateModal from './DonateModal'
 import PackList, { packColor, packDisplayName } from './PackList'
 import ThemePicker from './ThemePicker'
 
@@ -21,7 +21,10 @@ export default function RoomScreen() {
   const [code, setCode] = useState('')
   const [selectedWordPack, setSelectedWordPack] = useState('standard')
   const [showWordPackDropdown, setShowWordPackDropdown] = useState(false)
-  const { openStore, native } = useMonetization()
+  const [showDonate, setShowDonate] = useState(false)
+  // Donations are web-only (store rules); resolved after mount to keep SSR output stable
+  const [canDonate, setCanDonate] = useState(false)
+  useEffect(() => setCanDonate(!isNative()), [])
 
   // Invite links (?room=CODE) drop the player straight into the join form
   useEffect(() => {
@@ -115,13 +118,13 @@ export default function RoomScreen() {
               <Users className="w-5 h-5" />
               Join Existing Room
             </button>
-            {native && (
+            {canDonate && (
               <button
-                onClick={() => openStore()}
-                className="w-full py-3 px-6 bg-white/10 hover:bg-white/20 border border-yellow-500/30 rounded-xl font-semibold text-yellow-300 transition-all flex items-center justify-center gap-3 text-sm md:text-base"
+                onClick={() => setShowDonate(true)}
+                className="w-full py-3 px-6 bg-white/10 hover:bg-white/20 border border-pink-500/30 rounded-xl font-semibold text-pink-300 transition-all flex items-center justify-center gap-3 text-sm md:text-base"
               >
-                <Crown className="w-5 h-5" />
-                Store
+                <Heart className="w-5 h-5" />
+                Donate to keep the game alive
               </button>
             )}
           </motion.div>
@@ -250,6 +253,8 @@ export default function RoomScreen() {
             </form>
           </motion.div>
         )}
+
+        <DonateModal open={showDonate} onClose={() => setShowDonate(false)} />
 
         {/* Version & Copyright */}
         <div className="mt-3 text-center">

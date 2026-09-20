@@ -66,21 +66,7 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>GADApplicationIdentifier</key>
-	<!-- Google's TEST app id. Replace with your AdMob iOS app id before release. -->
-	<string>ca-app-pub-3940256099942544~1458002511</string>
-	<key>NSUserTrackingUsageDescription</key>
-	<string>This lets ads be more relevant to you. The game works the same either way.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<key>SKAdNetworkItems</key>
-	<!-- Google's identifier. Add the rest of Google's current list before release:
-	     https://developers.google.com/admob/ios/quick-start#update_your_infoplist -->
-	<array>
-		<dict>
-			<key>SKAdNetworkIdentifier</key>
-			<string>cstr6suwn9.skadnetwork</string>
-		</dict>
-	</array>
 </dict>
 </plist>

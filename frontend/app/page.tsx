@@ -4,26 +4,14 @@ import { GameProvider, useGame } from '@/components/GameContext'
 import GameOverScreen from '@/components/GameOverScreen'
 import GameScreen from '@/components/GameScreen'
 import LobbyScreen from '@/components/LobbyScreen'
-import { MonetizationProvider, useMonetization } from '@/components/MonetizationContext'
 import RoomScreen from '@/components/RoomScreen'
-import StoreModal from '@/components/StoreModal'
+import { ThemeProvider } from '@/components/ThemeContext'
 import { setKeepAwake } from '@/lib/native/device'
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 
 function GameContent() {
   const { currentScreen, notifications, isReconnecting } = useGame()
-  const { setBannerWanted, bannerActive, showInterstitial } = useMonetization()
-  const previousScreen = useRef(currentScreen)
-
-  // Ads live on the menu and lobby only; a game in progress is never covered or
-  // interrupted. One interstitial at most when a game ends (cooldown enforced).
-  useEffect(() => {
-    setBannerWanted(!isReconnecting && (currentScreen === 'room' || currentScreen === 'lobby'))
-    if (currentScreen === 'gameover' && previousScreen.current === 'game') void showInterstitial()
-    previousScreen.current = currentScreen
-  }, [currentScreen, isReconnecting, setBannerWanted, showInterstitial])
-
   // A sleeping screen drops the player (or, for the host, freezes the room)
   useEffect(() => {
     void setKeepAwake(currentScreen !== 'room')
@@ -46,8 +34,7 @@ function GameContent() {
   }
 
   return (
-    <main className={`min-h-screen p-2 sm:p-4 md:p-6 lg:p-8 ${bannerActive ? 'pb-20' : ''}`}>
-      <StoreModal />
+    <main className="min-h-screen p-2 sm:p-4 md:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto">
         {currentScreen === 'room' && <RoomScreen />}
         {currentScreen === 'lobby' && <LobbyScreen />}
@@ -88,10 +75,10 @@ function GameContent() {
 
 export default function Home() {
   return (
-    <MonetizationProvider>
+    <ThemeProvider>
       <GameProvider>
         <GameContent />
       </GameProvider>
-    </MonetizationProvider>
+    </ThemeProvider>
   )
 }

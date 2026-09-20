@@ -1,225 +1,58 @@
-# 🎯 Deployment Architecture
+# Architecture
 
-## Current Setup (Local Development)
-
-```
-┌─────────────────┐         ┌─────────────────┐
-│   Frontend      │────────▶│    Backend      │
-│   (Next.js)     │ Socket  │  (Socket.IO)    │
-│  localhost:3001 │   ⚡    │  localhost:3000 │
-└─────────────────┘         └─────────────────┘
-      ✅ Works!                  ✅ Works!
-```
-
----
-
-## ❌ WRONG: Vercel Only (WON'T WORK)
+One codebase, three ways to run it: the **website**, the **Android/iOS apps**, and an
+optional **Node server** kept as a rollback. All game rules live in a single file that
+only talks to a Socket.IO-*shaped* interface, so the same rules run on a server or
+inside a player's device.
 
 ```
-┌─────────────────┐         ┌─────────────────┐
-│   Frontend      │────────▶│    Backend      │
-│   (Next.js)     │   ❌    │  (Socket.IO)    │
-│   Vercel ✅     │  NO!    │   NOWHERE ❌    │
-└─────────────────┘         └─────────────────┘
-       Shows UI              NOT DEPLOYED!
-     "Disconnected"          Game broken!
+                 ┌─────────────────────────────────────┐
+                 │  frontend/lib/game/gameCore.js      │
+                 │  rooms, teams, words, turns,        │
+                 │  scoring, kicks, reconnects         │
+                 └──────────────┬──────────────────────┘
+                                │ talks to an "io" object
+             ┌──────────────────┴───────────────────┐
+   P2P MODE (default)                     SERVER MODE (rollback)
+   io = lib/p2p/hostIO.ts                 io = real Socket.IO (server.js)
+   in the HOST'S browser/app
+             │                                      │
+   WebRTC data channels (PeerJS)               WebSockets
+             │                                      │
+     other players' devices                 all players' devices
 ```
 
-**Problem**: Backend not deployed = No multiplayer!
+Switch with `NEXT_PUBLIC_GAME_MODE=server` (default is P2P). See `SERVERLESS.md`.
 
----
+## Layers
 
-## ✅ CORRECT: Vercel + Render (WORKS!)
+| Layer | Where | What it does |
+| --- | --- | --- |
+| Game core | `frontend/lib/game/gameCore.js` | Authoritative rules. Validates every event (sender, team, dealt words, points), rate-limits sockets, never throws on bad input |
+| Catalog | `frontend/lib/game/packCatalog.js` | Word pack + game mode metadata shared by core and UI (no words) |
+| Words | `frontend/lib/game/wordDatabase.json`, `themedWords.json` | Loaded only where the core runs (host device / server) |
+| P2P host | `frontend/lib/p2p/hostIO.ts`, `host.ts` | Socket.IO-server stand-in over WebRTC; room snapshots for host recovery |
+| P2P client | `frontend/lib/p2p/p2pSocket.ts`, `shared.ts` | Looks like a `socket.io-client` socket to the UI; chunked framing, reconnects |
+| UI | `frontend/app`, `frontend/components` | Next.js + React + Tailwind. `GameContext.tsx` turns socket events into state |
+| Native | `frontend/lib/native`, `frontend/android`, `frontend/ios` | Capacitor shell: share sheet, keep-awake, invite links, rating prompt |
+| Node server | `server.js` | Express + Socket.IO + Google Sheets feedback, delegates to the core |
 
-```
-┌─────────────────┐         ┌─────────────────┐
-│   Frontend      │────────▶│    Backend      │
-│   (Next.js)     │ Socket  │  (Socket.IO)    │
-│   Vercel ✅     │   ⚡    │   Render ✅     │
-│                 │  HTTPS  │                 │
-│ vercel.app      │         │ onrender.com    │
-└─────────────────┘         └─────────────────┘
-       ✅ Works!                  ✅ Works!
-         
-         Users can play from anywhere! 🌍
-```
+## What stays private
 
----
+The room object is broadcast often, so `room.toJSON()` strips everything a client must
+not see: upcoming words, word pools, custom pack contents, ban lists and players'
+session ids (which prove seat ownership). Clients only ever receive the words in play.
 
-## Why Two Platforms?
-
-### Vercel (Frontend)
-- ✅ Perfect for Next.js
-- ✅ Fast builds
-- ✅ Global CDN
-- ✅ Automatic deployments
-- ❌ No WebSocket servers
-
-### Render (Backend)
-- ✅ Supports WebSockets
-- ✅ Always-on server
-- ✅ Free tier
-- ✅ Easy deployment
-- ❌ Not optimized for Next.js
-
-### Together = Perfect! 🎯
-
----
-
-## Data Flow
+## Deployment
 
 ```
-┌──────────┐
-│  User 1  │──┐
-└──────────┘  │
-              ▼
-┌──────────┐  ┌─────────────┐  ┌──────────────┐
-│  User 2  │─▶│  Frontend   │─▶│   Backend    │
-└──────────┘  │  (Vercel)   │  │  (Render)    │
-              └─────────────┘  └──────────────┘
-┌──────────┐        │                  │
-│  User 3  │────────┘                  │
-└──────────┘                           │
-                                       │
-              ┌────────────────────────┘
-              ▼
-       Game State Sync
-       - Room management
-       - Score updates
-       - Real-time guesses
-       - Turn timers
+git push main
+   ├─ Vercel            -> website (static pages, no backend)
+   └─ GitHub Actions    -> type-check, P2P smoke test, web build,
+                           Android APK (published as the "latest-apk" release),
+                           iOS compile check
 ```
 
----
-
-## Environment Variables
-
-### Frontend (.env.local)
-```bash
-NEXT_PUBLIC_SERVER_URL=https://your-backend.onrender.com
-```
-
-This tells the frontend where to find the backend!
-
-### Backend
-No special env vars needed for basic deployment.
-
----
-
-## Deployment Order
-
-```
-1. Deploy Backend First    (Render)
-   ↓
-2. Get Backend URL         (Copy it!)
-   ↓
-3. Update Frontend Config  (Add URL)
-   ↓
-4. Deploy Frontend         (Vercel)
-   ↓
-5. Test & Play!            🎉
-```
-
-**DO NOT** skip step 3 or it won't work!
-
----
-
-## Quick Reference
-
-| Component | Platform | URL Format | Free Tier |
-|-----------|----------|------------|-----------|
-| Frontend | Vercel | `*.vercel.app` | ✅ Yes |
-| Backend | Render | `*.onrender.com` | ✅ Yes (750hrs) |
-
----
-
-## Testing Checklist
-
-After deployment, verify:
-
-```
-Frontend (Vercel):
-├── ✅ Page loads
-├── ✅ No 404 errors
-├── ✅ Styles load correctly
-└── ✅ Shows "Connected" status (🟢)
-
-Backend (Render):
-├── ✅ Service is "Live"
-├── ✅ No crashes in logs
-└── ✅ Responds to WebSocket connections
-
-Game Functionality:
-├── ✅ Can create room
-├── ✅ Room code generated
-├── ✅ Can join room from other device
-├── ✅ Players see each other
-├── ✅ Can join teams
-├── ✅ Game starts
-├── ✅ Words display
-├── ✅ Typing works
-├── ✅ Scores update in real-time
-└── ✅ Game completes successfully
-```
-
----
-
-## Common Mistakes
-
-### ❌ Deploying frontend before backend
-**Result**: "Disconnected" error
-
-**Fix**: Deploy backend first, get URL, then deploy frontend
-
----
-
-### ❌ Forgetting environment variable
-**Result**: Frontend tries to connect to localhost
-
-**Fix**: Add `NEXT_PUBLIC_SERVER_URL` in Vercel dashboard
-
----
-
-### ❌ Wrong backend URL format
-**Result**: Cannot connect
-
-**Fix**: Use full URL with https://
-```bash
-# ❌ Wrong
-NEXT_PUBLIC_SERVER_URL=taboo-backend.onrender.com
-
-# ✅ Correct  
-NEXT_PUBLIC_SERVER_URL=https://taboo-backend.onrender.com
-```
-
----
-
-### ❌ Not redeploying after env change
-**Result**: Old settings still active
-
-**Fix**: Redeploy in Vercel after changing environment variables
-
----
-
-## Success Indicators
-
-### You'll know it works when:
-
-1. **Connection Status**: 🟢 "Connected" (green)
-2. **Create Room**: Generates 6-character code
-3. **Join Room**: Another device can join
-4. **Gameplay**: Words appear, typing works, scores update
-5. **No Errors**: Browser console is clean
-
----
-
-## Next Steps
-
-After successful deployment:
-1. ✅ Test thoroughly
-2. ✅ Share URL with friends
-3. ✅ Add custom domain (optional)
-4. ✅ Monitor usage
-5. ✅ Enjoy! 🎉
-
-**Ready to deploy?** Follow [DEPLOY.md](./DEPLOY.md) for detailed steps!
+Third parties: Vercel (static hosting) and the PeerJS broker/TURN (connection setup
+only). No ads, analytics or payment SDKs. Rooms cost nothing to run: the host's device
+provides the compute and bandwidth.

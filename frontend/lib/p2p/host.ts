@@ -11,6 +11,8 @@ const MAX_CODE_ATTEMPTS = 5
 
 // Events only the hosting tab itself may send
 const LOCAL_ONLY_EVENTS = new Set(['create-room', 'disconnect', 'connection'])
+// Far above any real party; stops a script from exhausting the host's browser
+const MAX_REMOTE_PLAYERS = 40
 
 // Host recovery: the room is mirrored to localStorage so a reloaded (or crashed and
 // reopened) host tab can pick the game back up while players are still retrying.
@@ -80,11 +82,6 @@ function readSnapshot(): StoredSnapshot | null {
   }
 }
 
-/** Room code this browser was hosting moments ago, if it can still be resumed. */
-export function resumableRoomCode(): string | null {
-  return readSnapshot()?.roomCode || null
-}
-
 function clearSnapshot() {
   try {
     localStorage.removeItem(SNAPSHOT_KEY)
@@ -129,7 +126,7 @@ function serveRoom(peer: Peer, roomCode: string, localId: string, deviceId: stri
     const clientId: string = conn.metadata?.clientId || conn.peer
     const clientDevice: string = conn.metadata?.deviceId || conn.peer
     // Nobody remote may speak as the host's own player
-    if (clientId === localId || typeof clientId !== 'string' || clientId.length > 64) {
+    if (clientId === localId || typeof clientId !== 'string' || clientId.length > 64 || typeof clientDevice !== 'string' || clientDevice.length > 80 || remoteIds.size >= MAX_REMOTE_PLAYERS) {
       conn.close()
       return
     }

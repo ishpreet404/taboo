@@ -1,8 +1,7 @@
 'use client'
 
-import { CUSTOM_PACK_PRODUCT, getPack, isCustomPackKey, PACKS } from '@/lib/game/packCatalog'
-import { Check, Lock, PenLine } from 'lucide-react'
-import { useMonetization } from './MonetizationContext'
+import { getPack, isCustomPackKey, PACKS } from '@/lib/game/packCatalog'
+import { Check, PenLine } from 'lucide-react'
 
 /** Display name for any pack key, including a room's custom pack. */
 export function packDisplayName(key: string, customPackName?: string | null): string {
@@ -24,11 +23,8 @@ interface PackListProps {
   onClose?: () => void
 }
 
-// The rows inside every word-pack dropdown. Locked packs open the store focused on
-// the product that unlocks them (where a rewarded ad is the free way in).
+// The rows inside every word-pack dropdown
 export default function PackList({ selected, onSelect, onCustom, onClose }: PackListProps) {
-  const { isPackLocked, customPacksLocked, openStore } = useMonetization()
-
   return (
     <div role="listbox" aria-label="Word packs">
       {onCustom && (
@@ -38,8 +34,7 @@ export default function PackList({ selected, onSelect, onCustom, onClose }: Pack
           aria-selected={isCustomPackKey(selected)}
           onClick={() => {
             onClose?.()
-            if (customPacksLocked) openStore(CUSTOM_PACK_PRODUCT)
-            else onCustom()
+            onCustom()
           }}
           className={`w-full px-4 py-3 text-left hover:bg-white/10 transition-colors flex items-center gap-3 border-b border-white/10 ${isCustomPackKey(selected) ? 'bg-white/10' : ''}`}
         >
@@ -48,16 +43,13 @@ export default function PackList({ selected, onSelect, onCustom, onClose }: Pack
             <span className="block text-sm font-bold bg-gradient-to-r from-rose-400 to-indigo-400 bg-clip-text text-transparent">Custom Pack</span>
             <span className="block text-xs text-gray-400">Write your own words</span>
           </span>
-          {customPacksLocked && <Lock className="w-4 h-4 text-yellow-400 shrink-0" aria-label="Premium feature" />}
         </button>
       )}
 
       {CATEGORIES.map((category) => (
         <div key={category}>
           <div className="px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-gray-500">{category}</div>
-          {PACKS.filter((p) => p.category === category).map((pack) => {
-            const locked = isPackLocked(pack.key)
-            return (
+          {PACKS.filter((p) => p.category === category).map((pack) => (
               <button
                 key={pack.key}
                 type="button"
@@ -65,8 +57,7 @@ export default function PackList({ selected, onSelect, onCustom, onClose }: Pack
                 aria-selected={selected === pack.key}
                 onClick={() => {
                   onClose?.()
-                  if (locked) openStore(pack.product)
-                  else onSelect(pack.key)
+                  onSelect(pack.key)
                 }}
                 className={`w-full px-4 py-2.5 text-left hover:bg-white/10 transition-colors flex items-center gap-3 ${selected === pack.key ? 'bg-white/10' : ''}`}
               >
@@ -74,11 +65,9 @@ export default function PackList({ selected, onSelect, onCustom, onClose }: Pack
                   <span className={`block text-sm font-bold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent`}>{pack.name}</span>
                   <span className="block text-xs text-gray-400 leading-tight">{pack.description}</span>
                 </span>
-                {locked && <Lock className="w-4 h-4 text-yellow-400 shrink-0" aria-label="Premium pack" />}
                 {selected === pack.key && <Check className="w-4 h-4 text-green-500 shrink-0" />}
               </button>
-            )
-          })}
+          ))}
         </div>
       ))}
     </div>
