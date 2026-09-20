@@ -8,6 +8,14 @@
 // Usage: attachGameServer(io, { sendFeedback, sendSuggestions, generateRoomCode, logger })
 
 const wordDatabaseJSON = require("./wordDatabase.json");
+const themedWords = require("./themedWords.json");
+const catalog = require("./packCatalog.js");
+
+// Themed packs live in their own file as "<theme>_<difficulty>" groups, which is
+// exactly the custom-group format the loader below already understands.
+if (wordDatabaseJSON && wordDatabaseJSON.words) {
+	wordDatabaseJSON.words = { ...themedWords, ...wordDatabaseJSON.words };
+}
 
 const SILENT_LOGGER = { log() {}, info() {}, warn() {}, error() {} };
 
@@ -118,6 +126,32 @@ async function handleRoomClosure(room, roomCode, reason = "Room closed") {
 	} catch (e) {
 		console.warn(`Failed to clear teamNames for room ${roomCode}:`, e);
 	}
+}
+
+// Server-only room fields: upcoming words, word pools and ban lists. The room object
+// is sent to clients in many events; these must never go with it (they would let a
+// guesser read the answers, and they are by far the largest part of the room).
+const ROOM_SECRET_FIELDS = [
+	"wordPools",
+	"teamWordBatches",
+	"teamBonusPools",
+	"gameWordPool",
+	"usedWordIndices",
+	"bannedIPs",
+	"disconnectedPlayers",
+];
+
+function hideRoomSecrets(room) {
+	Object.defineProperty(room, "toJSON", {
+		value() {
+			const publicRoom = { ...this };
+			for (const field of ROOM_SECRET_FIELDS) delete publicRoom[field];
+			return publicRoom;
+		},
+		enumerable: false,
+		configurable: true,
+	});
+	return room;
 }
 
 // Helper function to check if a socket is admin (host or co-admin)
@@ -712,6 +746,17 @@ WORD_PACKS["hindi"] = {
 	description: "Mix of Hindi Easy + Medium + Hard",
 };
 
+// Everything else comes from the shared catalog (themed packs etc.)
+for (const pack of catalog.PACKS) {
+	if (!WORD_PACKS[pack.key]) {
+		WORD_PACKS[pack.key] = {
+			name: pack.name,
+			difficulties: pack.difficulties,
+			description: pack.description,
+		};
+	}
+}
+
 // Build word databases for each pack
 const wordDatabasesByPack = {};
 // Support custom / language-specific groups defined in wordDatabase.json
@@ -789,6 +834,71 @@ function getDifficultiesForPack(packKey) {
 
 	// remove duplicates while preserving order
 	return [...new Set(mapped)];
+}
+
+// ========================================
+// CUSTOM (HOST-WRITTEN) PACKS
+// ========================================
+// A custom pack is registered like any other pack, under a key private to its
+// room ("custom:ROOMCODE"), so word selection needs no special cases.
+
+function sanitizeCustomWords(rawWords) {
+	const limits = catalog.CUSTOM_PACK_LIMITS;
+	const seen = new Set();
+	const words = [];
+	for (const raw of Array.isArray(rawWords) ? rawWords : []) {
+		if (typeof raw !== "string") continue;
+		// Collapse whitespace, drop control characters
+		const word = raw
+			.replace(/[\u0000-\u001f\u007f]/g, " ")
+			.replace(/\s+/g, " ")
+			.trim()
+			.slice(0, limits.maxWordLength)
+			.toUpperCase();
+		if (word.length < 2 || seen.has(word)) continue;
+		seen.add(word);
+		words.push(word);
+		if (words.length >= limits.maxWords) break;
+	}
+	return words;
+}
+
+function registerCustomPack(room, name, rawWords) {
+	const words = sanitizeCustomWords(rawWords);
+	if (words.length < catalog.CUSTOM_PACK_LIMITS.minWords) return null;
+
+	const packKey = catalog.CUSTOM_PACK_PREFIX + room.code;
+	const packName =
+		(typeof name === "string" ? name.replace(/\s+/g, " ").trim() : "").slice(
+			0,
+			catalog.CUSTOM_PACK_LIMITS.maxNameLength,
+		) || "Custom Pack";
+
+	wordDatabasesByPack[packKey] = words.map((word) => {
+		const points = getAdaptivePoints(word, 5, 40, "medium");
+		const difficulty = points <= 12 ? "easy" : points <= 25 ? "medium" : "hard";
+		return { word, difficulty, points };
+	});
+	WORD_PACKS[packKey] = {
+		name: packName,
+		difficulties: ["easy", "medium", "hard"],
+		description: `${words.length} custom words`,
+	};
+
+	// Kept off the wire (non-enumerable): guessers must not be able to read the list
+	Object.defineProperty(room, "customPack", {
+		value: { name: packName, words },
+		enumerable: false,
+		writable: true,
+		configurable: true,
+	});
+	return { packKey, packName, wordCount: words.length };
+}
+
+function unregisterCustomPack(roomCode) {
+	const packKey = catalog.CUSTOM_PACK_PREFIX + roomCode;
+	delete wordDatabasesByPack[packKey];
+	delete WORD_PACKS[packKey];
 }
 
 // Build a fast lookup Set for existence checks (normalized lowercase) - includes ALL words from all difficulties
@@ -1445,6 +1555,7 @@ function onConnection(socket) {
 			},
 		};
 
+		hideRoomSecrets(room);
 		gameRooms.set(roomCode, room);
 		socket.join(roomCode);
 		socket.emit("room-created", { roomCode, room, wordPack });
@@ -1870,8 +1981,11 @@ function onConnection(socket) {
 		const room = gameRooms.get(roomCode);
 
 		if (room && isAdmin(room, socket.id)) {
-			// Validate if word pack exists
-			if (WORD_PACKS[wordPack]) {
+			// Validate if word pack exists (and never another room's custom pack)
+			const isForeignCustomPack =
+				catalog.isCustomPackKey(wordPack) &&
+				wordPack !== catalog.CUSTOM_PACK_PREFIX + roomCode;
+			if (WORD_PACKS[wordPack] && !isForeignCustomPack) {
 				room.wordPack = wordPack;
 				// Re-initialize pools for the new pack
 				room.wordPools = initializeWordPools(room.usedWordIndices, wordPack);
@@ -1881,6 +1995,46 @@ function onConnection(socket) {
 				console.log(`Word pack changed to ${wordPack} in room ${roomCode}`);
 			}
 		}
+	});
+
+	// Game mode is picked in the lobby and shown to everyone before the game starts
+	socket.on("set-game-mode", (data) => {
+		const { roomCode, mode } = data || {};
+		const room = gameRooms.get(roomCode);
+		if (!room || !isAdmin(room, socket.id) || room.started) return;
+		room.gameMode = catalog.getMode(mode).key;
+		io.to(roomCode).emit("game-mode-changed", { mode: room.gameMode });
+	});
+
+	// Host/admin supplies their own word list for this room
+	socket.on("set-custom-pack", (data) => {
+		const { roomCode, name, words } = data || {};
+		const room = gameRooms.get(roomCode);
+		if (!room || !isAdmin(room, socket.id)) return;
+		if (room.started) {
+			socket.emit("custom-pack-rejected", {
+				message: "Custom packs can only be changed in the lobby.",
+			});
+			return;
+		}
+
+		const result = registerCustomPack(room, name, words);
+		if (!result) {
+			socket.emit("custom-pack-rejected", {
+				message: `A custom pack needs at least ${catalog.CUSTOM_PACK_LIMITS.minWords} different words.`,
+			});
+			return;
+		}
+
+		room.wordPack = result.packKey;
+		room.customPackName = result.packName;
+		room.usedWordIndices = new Set();
+		room.wordPools = initializeWordPools(room.usedWordIndices, result.packKey);
+		io.to(roomCode).emit("word-pack-changed", {
+			wordPack: result.packKey,
+			customPackName: result.packName,
+			wordCount: result.wordCount,
+		});
 	});
 
 	// Quick existence check for suggested words (fast O(1) lookup using in-memory Set)
@@ -2010,6 +2164,14 @@ function onConnection(socket) {
 				confirmedTaboosByTeam: {}, // Track taboo point deductions per team: { teamIndex: totalPoints }
 			};
 
+			// Game mode: the catalog is authoritative, not whatever numbers the client sent
+			const mode = catalog.getMode(room.gameMode || gameState.mode);
+			room.gameState.mode = mode.key;
+			room.gameState.turnTime = mode.turnTime;
+			room.gameState.timeRemaining = mode.turnTime;
+			room.gameState.wordsPerTurn = mode.wordsPerTurn;
+			room.gameState.finalRoundMultiplier = mode.finalRoundMultiplier;
+
 			// If room.teamNames exists (persisted from lobby edits), apply them to the new game state teams
 			if (
 				room.teamNames &&
@@ -2104,12 +2266,25 @@ function onConnection(socket) {
 			}
 
 			// Get words from the pre-generated pool to ensure fairness
-			const words = getWordsFromPool(room, 10, true);
+			const wordsPerTurn = Math.min(10, Math.max(4, gs.wordsPerTurn || 10));
+			const words = getWordsFromPool(room, wordsPerTurn, true);
+			// Final-round multiplier (Showdown modes): bake it into the dealt words so
+			// every client shows and scores the same doubled values
+			const multiplier =
+				gs.finalRoundMultiplier > 1 && gs.round >= gs.maxRounds
+					? gs.finalRoundMultiplier
+					: 1;
+			gs.activeMultiplier = multiplier;
 
 			// Clear guessed words for new turn and store current words
 			gs.currentTurnGuessedWords = [];
 			gs.currentTurnWrongGuesses = [];
 			gs.guessedByPlayer = []; // Initialize tracking for who guessed what
+			if (multiplier > 1) {
+				for (let i = 0; i < words.length; i++) {
+					words[i] = { ...words[i], points: words[i].points * multiplier };
+				}
+			}
 			gs.currentWords = words; // Store words in game state for mid-game joins
 			gs.timeRemaining = gs.turnTime || 60; // Store initial time
 			gs.turnStartTime = Date.now(); // Record server timestamp when turn starts
@@ -2305,7 +2480,13 @@ function onConnection(socket) {
 					);
 
 					// Get bonus words with the dynamic distribution
-					const bonusWords = getDynamicBonusWords(room, selectedPattern);
+					let bonusWords = getDynamicBonusWords(room, selectedPattern);
+					if (gs.activeMultiplier > 1) {
+						bonusWords = bonusWords.map((w) => ({
+							...w,
+							points: w.points * gs.activeMultiplier,
+						}));
+					}
 
 					// Add to current words
 					if (!gs.currentWords) {
@@ -3107,6 +3288,7 @@ function onConnection(socket) {
 						"Room empty after player left",
 					).then(() => {
 						gameRooms.delete(roomCode);
+						unregisterCustomPack(roomCode);
 						console.log(`Room ${roomCode} deleted (empty after leave)`);
 					});
 				} else {
@@ -4303,6 +4485,7 @@ function onConnection(socket) {
 					if (room.players.length === 0) {
 						// If room is empty, delete it
 						gameRooms.delete(roomCode);
+						unregisterCustomPack(roomCode);
 						console.log(`Room ${roomCode} deleted (empty)`);
 					} else {
 						// Remove player from teams if game has started
@@ -4461,6 +4644,7 @@ function exportRoom(roomCode) {
 		bannedPlayers: Array.from(room.bannedPlayers || []),
 		bannedIPs: Array.from(room.bannedIPs || []),
 		disconnectedPlayers: undefined,
+		customPack: room.customPack || undefined,
 	});
 }
 
@@ -4473,6 +4657,11 @@ function importRoom(snapshot) {
 	room.bannedPlayers = new Set(room.bannedPlayers || []);
 	room.bannedIPs = new Set(room.bannedIPs || []);
 	room.disconnectedPlayers = new Map();
+	if (room.customPack) {
+		const { name, words } = room.customPack;
+		delete room.customPack;
+		registerCustomPack(room, name, words);
+	}
 	if (room.wordPools) {
 		Object.defineProperty(room.wordPools, "_packDatabase", {
 			value: getWordDatabaseForPack(room.wordPools._wordPack || room.wordPack),
@@ -4481,6 +4670,7 @@ function importRoom(snapshot) {
 			configurable: true,
 		});
 	}
+	hideRoomSecrets(room);
 	gameRooms.set(room.code, room);
 	return room;
 }

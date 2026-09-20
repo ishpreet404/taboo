@@ -146,3 +146,18 @@ export async function openAdPrivacyOptions(): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * Opt-in rewarded ad. Resolves true only if the user earned the reward.
+ * Available even with "Remove Ads": it is the user's choice, not an interruption.
+ */
+export async function showRewardedAd(): Promise<boolean> {
+  if (!(await ensureReady()) || !admob) return false
+  try {
+    await admob.AdMob.prepareRewardVideoAd({ adId: units().rewarded, isTesting: ADMOB.usingTestUnits })
+    const reward = await admob.AdMob.showRewardVideoAd()
+    return !!reward
+  } catch {
+    return false
+  }
+}

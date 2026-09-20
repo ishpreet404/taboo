@@ -3,10 +3,11 @@
 import { Clock, Copy, Edit3, GraduationCap, Handshake, Info, Lock, LogOut, MessageSquare, RefreshCw, Settings, Shield, Shuffle, SkipForward, Trophy as TrophyIcon, Unlock, UserCheck, Users, UserX, X, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
-import { WORD_PACKS } from './RoomScreen'
+import { getMode } from '@/lib/game/packCatalog'
+import { packColor, packDisplayName } from './PackList'
 
 export default function GameScreen() {
-  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, roomJoiningLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats, players, selectedWordPack } = useGame()
+  const { gameState, socket, roomCode, playerName, leaveGame, isHost, isAdmin, setCurrentScreen, myTeam, joinTeam, teamSwitchingLocked, roomJoiningLocked, setNotification: setGlobalNotification, tabooReporting, tabooVoting, setTabooSettings, submitWordFeedback, gamesPlayed, teamStats, players, selectedWordPack, customPackName } = useGame()
   const [gamePhase, setGamePhase] = useState<'turn-start' | 'playing' | 'turn-end'>('turn-start')
   const [currentWords, setCurrentWords] = useState<any[]>([])
   const [guessedWords, setGuessedWords] = useState<any[]>([])
@@ -15,7 +16,9 @@ export default function GameScreen() {
   const [playerWordAttempts, setPlayerWordAttempts] = useState<Map<string, Set<string>>>(new Map()) // Map of playerName -> Set of words they've guessed
   const [previousRoundWords, setPreviousRoundWords] = useState<any[]>([])
   const [guess, setGuess] = useState('')
-  const [timeRemaining, setTimeRemaining] = useState(60)
+  // Turn length comes from the game mode (the core sets gameState.turnTime)
+  const turnSeconds = gameState.turnTime || 60
+  const [timeRemaining, setTimeRemaining] = useState(turnSeconds)
   const [turnActive, setTurnActive] = useState(false)
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [showAdminPanel, setShowAdminPanel] = useState(false)
@@ -106,7 +109,7 @@ export default function GameScreen() {
       // When describer starts turn, all players switch to playing phase
       setGamePhase('playing')
       setTurnActive(true)
-      setTimeRemaining(60)
+      setTimeRemaining(turnSeconds)
       setGuessedWords([])
       setGuessedByPlayer([])
       setWrongGuesses([])
@@ -196,7 +199,7 @@ export default function GameScreen() {
       setWrongGuesses([])
       setPlayerWordAttempts(new Map())
       setPreviousRoundWords([]) // Clear previous round words when starting new turn
-      setTimeRemaining(60)
+      setTimeRemaining(turnSeconds)
       // Reset taboo tracking for new turn
       setTabooVotes({})
       setConfirmedTaboos([])
@@ -219,7 +222,7 @@ export default function GameScreen() {
       setGuessedWords([])
       setGuessedByPlayer([])
       setWrongGuesses([])
-      setTimeRemaining(60)
+      setTimeRemaining(turnSeconds)
       setTurnActive(false)
     }
 
@@ -241,7 +244,7 @@ export default function GameScreen() {
       setGuessedWords([])
       setGuessedByPlayer([])
       setWrongGuesses([])
-      setTimeRemaining(60)
+      setTimeRemaining(turnSeconds)
       setTurnActive(false)
     }
 
@@ -267,7 +270,7 @@ export default function GameScreen() {
       setGuessedWords([])
       setGuessedByPlayer([])
       setWrongGuesses([])
-      setTimeRemaining(60)
+      setTimeRemaining(turnSeconds)
       setTurnActive(false)
     }
 
@@ -302,7 +305,7 @@ export default function GameScreen() {
           setCurrentWords(data.currentWords)
           setGamePhase('playing')
           setTurnActive(true)
-          setTimeRemaining(data.timeRemaining || 60)
+          setTimeRemaining(data.timeRemaining || turnSeconds)
           setGuessedWords(data.currentTurnGuessedWords || [])
           setWrongGuesses(data.currentTurnWrongGuesses || [])
           setGuessedByPlayer(data.guessedByPlayer || [])
@@ -664,7 +667,7 @@ export default function GameScreen() {
     // Don't generate words on client - server will do it
     setGuessedWords([])
     setBonusMilestones([6, 10, 14, 18, 22]) // Reset bonus milestones
-    setTimeRemaining(60)
+    setTimeRemaining(turnSeconds)
     setTurnActive(true)
     setGamePhase('playing')
 
@@ -1827,9 +1830,19 @@ export default function GameScreen() {
             gamePhase === 'turn-start' && (
               <div className="glass-strong rounded-xl sm:rounded-2xl p-4 sm:p-6 md:p-8 text-center border border-white/10">
                 <div className="flex items-center justify-center mb-2">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} text-white shadow-lg`}>
-                    {WORD_PACKS.find(p => p.key === selectedWordPack)?.name || 'Standard'}
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r ${packColor(selectedWordPack)} text-white shadow-lg`}>
+                    {packDisplayName(selectedWordPack, customPackName)}
                   </span>
+                  {gameState.mode && gameState.mode !== 'classic' && (
+                    <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-white/10 border border-white/20 text-gray-200">
+                      {getMode(gameState.mode).name} · {turnSeconds}s
+                    </span>
+                  )}
+                  {(gameState.finalRoundMultiplier || 1) > 1 && gameState.round >= gameState.maxRounds && (
+                    <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-bold bg-yellow-500/20 border border-yellow-400/50 text-yellow-200">
+                      FINAL ROUND · {gameState.finalRoundMultiplier}× POINTS
+                    </span>
+                  )}
                 </div>
 
                 <div className={`text-3xl sm:text-4xl md:text-6xl mb-3 sm:mb-4 font-extrabold px-2 break-words ${gameState.currentTeamIndex === 0 ? 'text-blue-400' :

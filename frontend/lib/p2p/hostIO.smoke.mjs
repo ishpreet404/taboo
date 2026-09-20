@@ -23,7 +23,8 @@ const host = client('host')
 host.send('create-room', { playerName: 'Hosty', sessionId: 's-host', wordPack: 'standard' })
 assert.equal(last('host', 'room-created')?.data.roomCode, 'TEST42')
 // Sets/Maps on the room must be flattened exactly like Socket.IO would
-assert.deepEqual(last('host', 'room-created').data.room.bannedIPs, {})
+assert.equal(last('host', 'room-created').data.room.bannedIPs, undefined, 'ban list stays on the host')
+assert.deepEqual(last('host', 'room-created').data.room.bannedPlayers, {})
 
 const players = ['a', 'b', 'c'].map(client)
 players.forEach((p, i) => p.send('join-room', { roomCode: 'TEST42', playerName: `P${i}`, sessionId: `s-${p.id}` }))
@@ -34,20 +35,43 @@ const missing = client('lost')
 missing.send('join-room', { roomCode: 'NOPE00', playerName: 'X' })
 assert.equal(last('lost', 'error')?.data.message, 'Room not found')
 
+// Themed packs come from the shared catalog
+host.send('change-word-pack', { roomCode: 'TEST42', wordPack: 'bollywood' })
+assert.equal(last('a', 'word-pack-changed')?.data.wordPack, 'bollywood')
+// Another room's custom pack can't be selected
+host.send('change-word-pack', { roomCode: 'TEST42', wordPack: 'custom:OTHER1' })
+assert.equal(last('a', 'word-pack-changed')?.data.wordPack, 'bollywood')
+// Custom packs: too small is rejected, non-admins are ignored, valid one is applied
+host.send('set-custom-pack', { roomCode: 'TEST42', name: 'Tiny', words: ['one', 'two'] })
+assert.ok(last('host', 'custom-pack-rejected'))
+const myWords = Array.from({ length: 40 }, (_, i) => `inside joke ${i}`)
+players[0].send('set-custom-pack', { roomCode: 'TEST42', name: 'Hax', words: myWords })
+assert.equal(last('a', 'word-pack-changed')?.data.wordPack, 'bollywood')
+host.send('set-custom-pack', { roomCode: 'TEST42', name: '  Our   Jokes ', words: [...myWords, 'INSIDE JOKE 1', 42, '  '] })
+assert.deepEqual(last('a', 'word-pack-changed')?.data, { wordPack: 'custom:TEST42', customPackName: 'Our Jokes', wordCount: 40 })
+
 host.send('join-team', { roomCode: 'TEST42', teamIndex: 0 })
 players[0].send('join-team', { roomCode: 'TEST42', teamIndex: 0 })
 players[1].send('join-team', { roomCode: 'TEST42', teamIndex: 1 })
 players[2].send('join-team', { roomCode: 'TEST42', teamIndex: 1 })
-host.send('start-game', { roomCode: 'TEST42', gameState: { teamCount: 2, maxRounds: 4, turnTime: 60, teams: [{ name: 'Team 1', players: ['Hosty', 'P0'], score: 0 }, { name: 'Team 2', players: ['P1', 'P2'], score: 0 }] } })
+host.send('start-game', { roomCode: 'TEST42', gameState: { teamCount: 2, maxRounds: 1, mode: 'sprint', turnTime: 999, teams: [{ name: 'Team 1', players: ['Hosty', 'P0'], score: 0 }, { name: 'Team 2', players: ['P1', 'P2'], score: 0 }] } })
 const started = last('c', 'game-started')
 assert.ok(started, 'game-started reached a remote player')
 
 // Regression: after a turn starts, events carrying the room must stay small
 // (the whole word pack used to be serialised into every broadcast: ~300 KB)
 host.send('start-turn', { roomCode: 'TEST42' })
-assert.ok(last('a', 'turn-started'), 'turn-started reached a remote player')
+const turn = last('a', 'turn-started')?.data
+assert.ok(turn, 'turn-started reached a remote player')
+// Mode is enforced by the core (client asked for turnTime 999) and words come from the custom pack
+assert.equal(turn.gameState.turnTime, 45)
+assert.equal(turn.words.length, 8)
+assert.ok(turn.words.every((w) => w.word.startsWith('INSIDE JOKE')))
+// maxRounds 1 => this is the final round: sprint doubles it
+assert.equal(turn.gameState.activeMultiplier, 2)
+assert.ok(!JSON.stringify(core.gameRooms.get('TEST42')).includes('INSIDE JOKE 39') || turn.words.some((w) => w.word === 'INSIDE JOKE 39'), 'custom word list is not broadcast')
 const roomBytes = JSON.stringify(core.gameRooms.get('TEST42')).length
-assert.ok(roomBytes < 60000, `room payload too large: ${roomBytes} bytes`)
+assert.ok(roomBytes < 8000, `room payload too large: ${roomBytes} bytes`)
 
 // One-to-one messages rely on every socket sitting in a room named after its id
 io.to('b').emit('direct-test', { ok: true })
@@ -67,6 +91,8 @@ const restored = core.importRoom(snapshot)
 assert.ok(restored.usedWordIndices instanceof Set && restored.disconnectedPlayers instanceof Map)
 assert.ok(restored.wordPools._packDatabase.length > 0 && !Object.keys(restored.wordPools).includes('_packDatabase'))
 assert.equal(restored.players.length, 4)
+assert.equal(restored.customPack.words.length, 40)
+assert.ok(!Object.keys(restored).includes('customPack'))
 host.send('sync-game-state', { roomCode: 'TEST42' })
 
 // Dropping a client fires the core's disconnect handling (grace period)

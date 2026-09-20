@@ -6,11 +6,22 @@
   --foreground-rgb: 255, 255, 255;
   --background-start-rgb: 10, 10, 30;
   --background-end-rgb: 15, 52, 96;
+  --glow-rgb: 59, 130, 246;
 }
+
+/* Themes (lib/themes.ts). Set as <html data-theme="..."> */
+html[data-theme="midnight"] { --background-start-rgb: 0, 0, 0; --background-end-rgb: 26, 26, 46; --glow-rgb: 129, 140, 248; }
+html[data-theme="ember"] { --background-start-rgb: 30, 5, 5; --background-end-rgb: 140, 42, 10; --glow-rgb: 251, 146, 60; }
+html[data-theme="ocean"] { --background-start-rgb: 5, 25, 50; --background-end-rgb: 0, 110, 130; --glow-rgb: 34, 211, 238; }
+html[data-theme="forest"] { --background-start-rgb: 5, 30, 25; --background-end-rgb: 10, 80, 60; --glow-rgb: 74, 222, 128; }
+html[data-theme="sunset"] { --background-start-rgb: 60, 15, 40; --background-end-rgb: 160, 60, 30; --glow-rgb: 251, 191, 36; }
+html[data-theme="candy"] { --background-start-rgb: 60, 20, 80; --background-end-rgb: 190, 60, 130; --glow-rgb: 244, 114, 182; }
 
 body {
   color: rgb(var(--foreground-rgb));
-  background: linear-gradient(to bottom,
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(var(--glow-rgb), 0.18), transparent 55%),
+    linear-gradient(to bottom,
       rgb(var(--background-start-rgb)),
       rgb(var(--background-end-rgb)));
   min-height: 100vh;

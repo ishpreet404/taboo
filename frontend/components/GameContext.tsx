@@ -56,6 +56,11 @@ interface GameState {
   tabooVoting?: boolean // Enable taboo voting feature
   confirmedTaboosByTeam?: Record<number, number> // Track taboo point deductions per team
   gameStarted?: boolean
+  // Game mode (see lib/game/packCatalog.js); filled in by the game core
+  mode?: string
+  wordsPerTurn?: number
+  finalRoundMultiplier?: number
+  activeMultiplier?: number
 }
 
 interface Notification {
@@ -100,6 +105,10 @@ interface GameContextType {
   localPlayerPlayAgain: () => void
   selectedWordPack: string
   changeWordPack: (pack: string) => void
+  customPackName: string | null
+  setCustomPack: (name: string, words: string[]) => void
+  gameMode: string
+  setGameMode: (mode: string) => void
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined)
@@ -146,6 +155,15 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [gamesPlayed, setGamesPlayed] = useState<number>(0)
   const [playAgainDefaulted, setPlayAgainDefaulted] = useState(false)
   const [selectedWordPack, setSelectedWordPack] = useState('standard')
+  const [customPackName, setCustomPackName] = useState<string | null>(null)
+  const [gameMode, setGameModeState] = useState('classic')
+
+  // Lobby settings carried on the room object (joins, rejoins, reconnects)
+  const applyRoomSettings = (room: any) => {
+    if (room?.wordPack) setSelectedWordPack(room.wordPack)
+    setCustomPackName(room?.customPackName || null)
+    setGameModeState(room?.gameMode || 'classic')
+  }
   const [teamStats, setTeamStats] = useState<{ wins: number[]; ties: number[]; losses: number[]; streaks: number[] }>({ wins: [0, 0], ties: [0, 0], losses: [0, 0], streaks: [0, 0] })
   const [gameState, setGameState] = useState<GameState>({
     teams: [
@@ -194,6 +212,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
     setTeamSwitchingLocked(false)
     setTabooReporting(false)
     setTabooVoting(false)
+    setCustomPackName(null)
+    setGameModeState('classic')
   }
 
   // When this client initiates a play-again or starts a game, suppress lock/unlock notifications
@@ -281,6 +301,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     newSocket.on('reconnect-success', (data) => {
       console.log('✅ Reconnected to room:', data.roomCode)
       wasKicked.current = false
+      applyRoomSettings(data.room)
       setRoomCode(data.roomCode)
       setPlayers(data.room.players)
       setIsHost(data.isHost)
@@ -395,7 +416,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       // Set games played counter
       if (data.room?.gamesPlayed !== undefined) setGamesPlayed(data.room.gamesPlayed || 0)
       // Set word pack
-      if (data.room?.wordPack) setSelectedWordPack(data.room.wordPack)
+      applyRoomSettings(data.room)
       // Set team stats
       if (data.room?.teamStats) setTeamStats(data.room.teamStats)
       // Set room joining lock state if provided
@@ -436,7 +457,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setTabooVoting(data.tabooVoting)
       }
       // Set word pack
-      if (data.room?.wordPack) setSelectedWordPack(data.room.wordPack)
+      applyRoomSettings(data.room)
       // Find this player's team assignment
       const currentPlayer = data.room.players.find((p: any) => p.id === newSocket.id)
       if (currentPlayer) {
@@ -489,7 +510,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setTabooVoting(data.tabooVoting)
       }
       // Set word pack
-      if (data.room?.wordPack) setSelectedWordPack(data.room.wordPack)
+      applyRoomSettings(data.room)
       setCurrentScreen('game')
       setNotification({ message: 'Reconnected to game!', type: 'success' })
       setTimeout(() => setNotification(null), 3000)
@@ -536,6 +557,16 @@ export function GameProvider({ children }: { children: ReactNode }) {
     newSocket.on('word-pack-changed', (data) => {
       console.log('word-pack-changed received:', data)
       setSelectedWordPack(data.wordPack)
+      setCustomPackName(data.customPackName || null)
+    })
+
+    newSocket.on('game-mode-changed', (data) => {
+      if (data?.mode) setGameModeState(data.mode)
+    })
+
+    newSocket.on('custom-pack-rejected', (data) => {
+      setNotification({ message: data?.message || 'That custom pack could not be used.', type: 'warning' })
+      setTimeout(() => setNotification(null), 4000)
     })
 
     newSocket.on('player-joined-midgame', (data) => {
@@ -1045,8 +1076,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
       guessedWords: [],
       skippedWords: [],
       playerContributions: {},
-      teamCount
-    }
+      teamCount,
+      // The core turns the mode into turn length / words per turn / multipliers
+      mode: gameMode,
+    } as GameState
 
     // Suppress lock notifications briefly for the initiating client
     suppressLockNotificationsUntil.current = Date.now() + 2500
@@ -1097,6 +1130,19 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const changeWordPack = (pack: string) => {
     if (socket && roomCode && isAdmin) {
       socket.emit('change-word-pack', { roomCode, wordPack: pack })
+    }
+  }
+
+  const setCustomPack = (name: string, words: string[]) => {
+    if (socket && roomCode && isAdmin) {
+      socket.emit('set-custom-pack', { roomCode, name, words })
+    }
+  }
+
+  const setGameMode = (mode: string) => {
+    setGameModeState(mode)
+    if (socket && roomCode && isAdmin) {
+      socket.emit('set-game-mode', { roomCode, mode })
     }
   }
 
@@ -1151,6 +1197,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
         localPlayerPlayAgain,
         teamStats,
         selectedWordPack,
+        customPackName,
+        setCustomPack,
+        gameMode,
+        setGameMode,
         changeWordPack
       }}
     >

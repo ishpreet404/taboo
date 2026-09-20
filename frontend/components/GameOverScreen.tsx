@@ -1,8 +1,14 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { AlertTriangle, Home, Medal, RotateCw, Star, Trophy } from 'lucide-react'
+import { getMode } from '@/lib/game/packCatalog'
+import { hapticTap } from '@/lib/native/device'
+import { shareResultsCard } from '@/lib/native/resultsCard'
+import { recordGameFinished } from '@/lib/native/review'
+import { AlertTriangle, Home, Medal, RotateCw, Share2, Star, Trophy } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
+import { packDisplayName } from './PackList'
 
 interface PlayerContribution {
   name: string
@@ -14,7 +20,8 @@ interface PlayerContribution {
 }
 
 export default function GameOverScreen() {
-  const { gameState, leaveGame, socket, roomCode, localPlayerPlayAgain } = useGame()
+  const { gameState, leaveGame, socket, roomCode, localPlayerPlayAgain, myTeam, selectedWordPack, customPackName, setNotification } = useGame()
+  const [sharing, setSharing] = useState(false)
 
   // Get taboo deductions per team
   const tabooDeductionsByTeam = gameState.confirmedTaboosByTeam || {}
@@ -44,6 +51,27 @@ export default function GameOverScreen() {
   const contributions: PlayerContribution[] = Object.entries(gameState.playerContributions)
     .map(([name, data]: [string, any]) => ({ name, ...data }))
     .sort((a, b) => b.points - a.points)
+
+  // Once per finished game: count it, and after a win maybe ask for a store rating
+  useEffect(() => {
+    void hapticTap()
+    void recordGameFinished(winnerIndex !== null && winnerIndex === myTeam)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleShareResults = async () => {
+    setSharing(true)
+    const result = await shareResultsCard({
+      teams: teamsWithEffectiveScores.map((t) => ({ name: t.name, score: t.effectiveScore })),
+      winnerName: winner ? winner.name : null,
+      mvp: contributions[0] && contributions[0].points > 0 ? { name: contributions[0].name, points: contributions[0].points } : null,
+      packName: packDisplayName(selectedWordPack, customPackName),
+      modeName: getMode(gameState.mode).name,
+    })
+    setSharing(false)
+    if (result === 'downloaded') setNotification({ message: 'Results image saved - share it with your friends!', type: 'success' })
+    if (result === 'failed') setNotification({ message: 'Could not create the results image', type: 'warning' })
+  }
 
   return (
     <div className="py-8 max-w-4xl mx-auto">
@@ -221,7 +249,15 @@ export default function GameOverScreen() {
         transition={{ delay: 0.6 }}
         className="text-center"
       >
-        <div className="flex items-center justify-center gap-4">
+        <div className="flex flex-wrap items-center justify-center gap-4">
+          <button
+            onClick={handleShareResults}
+            disabled={sharing}
+            className="px-6 py-3 bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 rounded-xl font-semibold transition-all flex items-center gap-2 disabled:opacity-60"
+          >
+            <Share2 className="w-5 h-5" />
+            {sharing ? 'Preparing...' : 'Share Results'}
+          </button>
           {/* Individual Play Again available to all players */}
           <button
             onClick={() => {

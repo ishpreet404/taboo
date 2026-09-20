@@ -1,16 +1,16 @@
 'use client'
 
 import { AnimatePresence, motion } from 'framer-motion'
-import { displayPackName } from '@/lib/appConfig'
 import { shareInvite } from '@/lib/native/device'
 import { Book, Check, ChevronDown, Copy, Crown, Edit3, Flag, GraduationCap, Lock, LogOut, Play, PlayCircle, Share2, Shuffle, X } from 'lucide-react'
-import { useMonetization } from './MonetizationContext'
+import CustomPackModal from './CustomPackModal'
+import ModeSelector from './ModeSelector'
+import PackList, { packColor, packDescription, packDisplayName } from './PackList'
 import { useEffect, useRef, useState } from 'react'
 import { useGame } from './GameContext'
-import { WORD_PACKS } from './RoomScreen'
 
 export default function LobbyScreen() {
-  const { roomCode, players, isHost, isAdmin, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, roomJoiningLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted, gameState, setNotification, selectedWordPack, changeWordPack } = useGame()
+  const { roomCode, players, isHost, isAdmin, myTeam, joinTeam, startGame, playerName, leaveGame, teamSwitchingLocked, roomJoiningLocked, socket, lobbyTeamCount, tabooReporting, tabooVoting, setTabooSettings, playAgainDefaulted, gameState, setNotification, selectedWordPack, changeWordPack, customPackName, setCustomPack, gameMode, setGameMode } = useGame()
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [selectedRounds, setSelectedRounds] = useState<number>(12)
   const [editingTeamIndex, setEditingTeamIndex] = useState<number | null>(null)
@@ -356,7 +356,7 @@ export default function LobbyScreen() {
     socket?.emit('start-captain-selection', { roomCode })
   }
 
-  const { isPackLocked, openStore } = useMonetization()
+  const [showCustomPack, setShowCustomPack] = useState(false)
 
   const copyRoomCode = () => {
     if (roomCode) {
@@ -544,9 +544,9 @@ export default function LobbyScreen() {
                       className={`inline-flex px-4 py-2 glass-strong rounded-lg border border-white/10 hover:border-white/20 transition-all shadow-xl items-center justify-between gap-2 text-sm text-left group`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} shadow-[0_0_10px_rgba(59,130,246,0.5)]`} />
+                        <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${packColor(selectedWordPack)} shadow-[0_0_10px_rgba(59,130,246,0.5)]`} />
                         <span className="font-bold whitespace-nowrap">
-                          {displayPackName(WORD_PACKS.find(p => p.key === selectedWordPack)?.name) || 'Select Pack'}
+                          {packDisplayName(selectedWordPack, customPackName)}
                         </span>
                       </div>
                       <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform duration-300 ${showWordPackDropdown ? 'rotate-180' : ''}`} />
@@ -560,34 +560,18 @@ export default function LobbyScreen() {
                           exit={{ opacity: 0, y: 10, scale: 0.95 }}
                           className="absolute z-50 left-0 right-0 bg-black/70 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden shadow-2xl max-h-[40vh] overflow-y-auto text-white"
                         >
-                          {WORD_PACKS.map((pack) => (
-                            <button
-                              key={pack.key}
-                              onClick={() => {
-                                setShowWordPackDropdown(false)
-                                if (isPackLocked(pack.key)) return openStore()
-                                changeWordPack(pack.key)
-                              }}
-                              className={`w-full p-4 text-left hover:bg-white/5 transition-colors flex flex-col gap-1 border-b border-white/5 last:border-0 ${selectedWordPack === pack.key ? 'bg-white/5' : ''}`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <span className={`text-sm font-bold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent`}>
-                                  {displayPackName(pack.name)}
-                                </span>
-                                {isPackLocked(pack.key) && <Lock className="w-4 h-4 text-yellow-400" aria-label="Premium pack" />}
-                                {selectedWordPack === pack.key && (
-                                  <Check className="w-4 h-4 text-green-500" />
-                                )}
-                              </div>
-                              <span className="text-xs text-gray-400 leading-tight">{pack.description}</span>
-                            </button>
-                          ))}
+                          <PackList
+                              selected={selectedWordPack}
+                              onSelect={changeWordPack}
+                              onCustom={() => setShowCustomPack(true)}
+                              onClose={() => setShowWordPackDropdown(false)}
+                            />
                         </motion.div>
                       )}
                     </AnimatePresence>
                   </div>
                   <p className="text-xs text-gray-500 italic max-w-md text-center px-4 truncate whitespace-nowrap">
-                    {WORD_PACKS.find(p => p.key === selectedWordPack)?.description}
+                    {packDescription(selectedWordPack)}
                   </p>
                 </div>
               </div>
@@ -664,9 +648,9 @@ export default function LobbyScreen() {
                         className={`inline-flex px-4 py-2 glass-strong rounded-lg border border-white/10 hover:border-white/20 transition-all shadow-xl items-center justify-between gap-2 text-sm text-left group`}
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} shadow-[0_0_10px_rgba(59,130,246,0.5)]`} />
+                          <div className={`w-3 h-3 rounded-full bg-gradient-to-r ${packColor(selectedWordPack)} shadow-[0_0_10px_rgba(59,130,246,0.5)]`} />
                           <span className="font-bold whitespace-nowrap">
-                            {displayPackName(WORD_PACKS.find(p => p.key === selectedWordPack)?.name) || 'Select Pack'}
+                            {packDisplayName(selectedWordPack, customPackName)}
                           </span>
                         </div>
                         <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform duration-300 ${showWordPackDropdown ? 'rotate-180' : ''}`} />
@@ -680,34 +664,18 @@ export default function LobbyScreen() {
                             exit={{ opacity: 0, y: 10, scale: 0.95 }}
                             className="absolute z-50 left-0 right-0 bg-black/70 backdrop-blur-sm border border-white/10 rounded-xl overflow-hidden shadow-2xl max-h-[40vh] overflow-y-auto text-white"
                           >
-                            {WORD_PACKS.map((pack) => (
-                              <button
-                                key={pack.key}
-                                onClick={() => {
-                                  setShowWordPackDropdown(false)
-                                  if (isPackLocked(pack.key)) return openStore()
-                                  changeWordPack(pack.key)
-                                }}
-                                className={`w-full p-4 text-left hover:bg-white/5 transition-colors flex flex-col gap-1 border-b border-white/5 last:border-0 ${selectedWordPack === pack.key ? 'bg-white/5' : ''}`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className={`text-sm font-bold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent`}>
-                                    {displayPackName(pack.name)}
-                                  </span>
-                                  {isPackLocked(pack.key) && <Lock className="w-4 h-4 text-yellow-400" aria-label="Premium pack" />}
-                                  {selectedWordPack === pack.key && (
-                                    <Check className="w-4 h-4 text-green-500" />
-                                  )}
-                                </div>
-                                <span className="text-xs text-gray-400 leading-tight">{pack.description}</span>
-                              </button>
-                            ))}
+                            <PackList
+                              selected={selectedWordPack}
+                              onSelect={changeWordPack}
+                              onCustom={() => setShowCustomPack(true)}
+                              onClose={() => setShowWordPackDropdown(false)}
+                            />
                           </motion.div>
                         )}
                       </AnimatePresence>
                     </div>
                     <p className="text-xs text-gray-500 italic max-w-md text-center px-4 truncate whitespace-nowrap">
-                      {WORD_PACKS.find(p => p.key === selectedWordPack)?.description}
+                      {packDescription(selectedWordPack)}
                     </p>
                   </div>
                 )}
@@ -773,8 +741,8 @@ export default function LobbyScreen() {
           <div className="mt-4 flex flex-col items-center justify-center gap-2 text-sm text-gray-400">
             <div className="flex items-center gap-2">
               <span>Word Pack:</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} text-white shadow-lg inline-block whitespace-nowrap`}>
-                {displayPackName(WORD_PACKS.find(p => p.key === selectedWordPack)?.name) || 'Standard'}
+              <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-gradient-to-r ${packColor(selectedWordPack)} text-white shadow-lg inline-block whitespace-nowrap`}>
+                {packDisplayName(selectedWordPack, customPackName)}
               </span>
             </div>
 
@@ -798,7 +766,15 @@ export default function LobbyScreen() {
         transition={{ delay: 0.3 }}
         className="text-center mb-6"
       >
-        {/* Randomize button removed here (kept in the centered host-controls row) */}
+        <ModeSelector selected={gameMode} onSelect={setGameMode} disabled={!isHost && !isAdmin} />
+        <CustomPackModal
+          open={showCustomPack}
+          onClose={() => setShowCustomPack(false)}
+          onSubmit={(name, words) => {
+            setCustomPack(name, words)
+            setShowCustomPack(false)
+          }}
+        />
 
         {isHost && (
           <button

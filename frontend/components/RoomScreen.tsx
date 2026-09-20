@@ -1,29 +1,18 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { APP_NAME, displayPackName, PUBLISHER_NAME } from '@/lib/appConfig'
+import { APP_NAME, PUBLISHER_NAME } from '@/lib/appConfig'
+import { PACKS } from '@/lib/game/packCatalog'
 import { onInviteLink, roomCodeFromUrl } from '@/lib/native/device'
-import { ChevronDown, Crown, Lock, Users, Wifi, WifiOff } from 'lucide-react'
+import { ChevronDown, Crown, Users, Wifi, WifiOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 import { useMonetization } from './MonetizationContext'
+import PackList, { packColor, packDisplayName } from './PackList'
+import ThemePicker from './ThemePicker'
 
-// Word pack options for room creation
-export const WORD_PACKS = [
-  { key: 'standard', name: 'Standard', description: 'Easy + Medium + Hard mix', color: 'from-blue-500 to-blue-600', tags: ['EN'] },
-  { key: 'difficult', name: 'Difficult', description: 'All difficulties including Insane', color: 'from-purple-500 to-purple-600', tags: ['EN'] },
-  { key: 'intense', name: 'Intense', description: 'Hard + Insane only - Max challenge!', color: 'from-pink-500 to-rose-600', tags: ['EN'] },
-  { key: 'easy', name: 'Easy', description: 'Easy words only (5-12 pts)', color: 'from-green-500 to-green-600', tags: ['EN'] },
-  { key: 'medium', name: 'Medium', description: 'Medium words only (13-25 pts)', color: 'from-yellow-500 to-yellow-600', tags: ['EN'] },
-  { key: 'hard', name: 'Hard', description: 'Hard words only (26-40 pts)', color: 'from-orange-500 to-orange-600', tags: ['EN'] },
-  { key: 'insane', name: 'Insane', description: 'Insane words only (41-60 pts)', color: 'from-red-500 to-red-600', tags: ['EN'] },
-
-  // Hindi packs (use wordDatabase.json keys: hindi_easy, hindi_medium, hindi_hard)
-  { key: 'hindi', name: 'Hindi', description: 'Mix of Hindi Easy + Medium + Hard', color: 'from-blue-500 to-red-500', tags: ['HI'] },
-  { key: 'hindi_easy', name: 'Hindi (Easy)', description: 'Hindi Easy words', color: 'from-green-500 to-green-600', tags: ['HI'] },
-  { key: 'hindi_medium', name: 'Hindi (Medium)', description: 'Hindi Medium words', color: 'from-yellow-500 to-yellow-600', tags: ['HI'] },
-  { key: 'hindi_hard', name: 'Hindi (Hard)', description: 'Hindi Hard words', color: 'from-orange-500 to-orange-600', tags: ['HI'] },
-]
+// Word pack options come from the shared catalog (also used by the game core)
+export const WORD_PACKS = PACKS
 
 export default function RoomScreen() {
   const { createRoom, joinRoom, connected } = useGame()
@@ -32,7 +21,7 @@ export default function RoomScreen() {
   const [code, setCode] = useState('')
   const [selectedWordPack, setSelectedWordPack] = useState('standard')
   const [showWordPackDropdown, setShowWordPackDropdown] = useState(false)
-  const { isPackLocked, openStore, native } = useMonetization()
+  const { openStore, native } = useMonetization()
 
   // Invite links (?room=CODE) drop the player straight into the join form
   useEffect(() => {
@@ -128,7 +117,7 @@ export default function RoomScreen() {
             </button>
             {native && (
               <button
-                onClick={openStore}
+                onClick={() => openStore()}
                 className="w-full py-3 px-6 bg-white/10 hover:bg-white/20 border border-yellow-500/30 rounded-xl font-semibold text-yellow-300 transition-all flex items-center justify-center gap-3 text-sm md:text-base"
               >
                 <Crown className="w-5 h-5" />
@@ -137,6 +126,8 @@ export default function RoomScreen() {
             )}
           </motion.div>
         )}
+
+        {mode === 'select' && <ThemePicker />}
 
         {/* Create Room Form */}
         {mode === 'create' && (
@@ -166,9 +157,9 @@ export default function RoomScreen() {
                 <button
                   type="button"
                   onClick={() => setShowWordPackDropdown(!showWordPackDropdown)}
-                  className={`w-full px-4 py-3 bg-gradient-to-r ${WORD_PACKS.find(p => p.key === selectedWordPack)?.color || 'from-blue-500 to-blue-600'} rounded-xl font-semibold text-white transition-all flex items-center justify-between text-sm md:text-base`}
+                  className={`w-full px-4 py-3 bg-gradient-to-r ${packColor(selectedWordPack)} rounded-xl font-semibold text-white transition-all flex items-center justify-between text-sm md:text-base`}
                 >
-                  <span>{displayPackName(WORD_PACKS.find(p => p.key === selectedWordPack)?.name) || 'Standard'}</span>
+                  <span>{packDisplayName(selectedWordPack)}</span>
                   <ChevronDown className={`w-5 h-5 transition-transform ${showWordPackDropdown ? 'rotate-180' : ''}`} />
                 </button>
 
@@ -176,32 +167,13 @@ export default function RoomScreen() {
                   <motion.div
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
-                    className="mt-2 bg-gray-900/95 backdrop-blur-lg border border-white/20 rounded-xl shadow-xl max-h-[200px] overflow-y-auto"
+                    className="mt-2 bg-gray-900/95 backdrop-blur-lg border border-white/20 rounded-xl shadow-xl max-h-[260px] overflow-y-auto"
                     style={{
                       scrollbarWidth: 'thin',
                       scrollbarColor: 'rgba(255, 255, 255, 0.3) rgba(255, 255, 255, 0.1)'
                     }}
                   >
-                    {WORD_PACKS.map((pack) => (
-                      <button
-                        key={pack.key}
-                        type="button"
-                        onClick={() => {
-                          setShowWordPackDropdown(false)
-                          if (isPackLocked(pack.key)) return openStore()
-                          setSelectedWordPack(pack.key)
-                        }}
-                        className={`w-full px-4 py-2.5 text-left hover:bg-white/10 transition-all flex flex-col ${selectedWordPack === pack.key ? 'bg-white/15' : ''}`}
-                      >
-                        <span className="flex items-center gap-2">
-                          <span className={`font-semibold bg-gradient-to-r ${pack.color} bg-clip-text text-transparent text-sm`}>
-                            {displayPackName(pack.name)}
-                          </span>
-                          {isPackLocked(pack.key) && <Lock className="w-3.5 h-3.5 text-yellow-400" aria-label="Premium pack" />}
-                        </span>
-                        <span className="text-xs text-gray-400">{pack.description}</span>
-                      </button>
-                    ))}
+                    <PackList selected={selectedWordPack} onSelect={setSelectedWordPack} onClose={() => setShowWordPackDropdown(false)} />
                   </motion.div>
                 )}
               </div>

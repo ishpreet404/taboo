@@ -32,24 +32,43 @@ on every push and uploads a debug APK you can sideload.
 | --- | --- | --- |
 | Banner ad | Home + lobby only | Never during a game |
 | Interstitial | When a game ends | Max one per 3 min |
-| **Remove Ads** (one-time IAP) | Store screen | Turns all ads off |
-| **Premium Word Packs** (one-time IAP) | Store screen, lock icons on packs | Insane, Intense, Difficult, Hindi packs. Only the host needs it, which is a natural selling point for whoever organises game night |
+| **Rewarded ad** | Tap any locked pack | Opt-in: unlocks that pack for 24 h. The free way in, and the best-paying ad format |
+| **Individual packs** (one-time IAP) | Store, lock icons on packs | One product per collection: `pack_bollywood`, `pack_cricket`, `pack_movies`, `pack_music`, `pack_sports`, `pack_science`, `pack_travel`, `pack_office`, `pack_festive`, `pack_hindi` (all Hindi variants), `pack_hardcore` (Difficult/Intense/Insane) |
+| **All Access** bundle (`premium_packs`) | Store | Every pack incl. future ones + custom packs + premium themes |
+| **Custom Packs** (`custom_packs`) | Lobby > word pack > Custom Pack | Host writes their own words (20-600) |
+| **Remove Ads** (`remove_ads`) | Store | Turns banner + interstitial off |
+| Premium themes | Home screen swatches | Ocean, Forest, Sunset, Candy come with All Access |
 
-Everything is driven by `frontend/lib/appConfig.ts` (which packs are premium,
-product ids, cooldowns). Purchases go through RevenueCat, which is free until
-$2.5k/month revenue and needs no server of yours. With no keys configured the
-Store says "unavailable", **no pack is locked**, and ads are Google TEST ads, so
-an unconfigured build can never cost users money or generate invalid traffic.
+Only the **host** needs to own a pack, which is a natural selling point for whoever
+organises game night. Free forever: Standard/Easy/Medium/Hard, Food & Drink, Kids & Family,
+three themes, all game modes.
+
+Where things are defined:
+
+- Packs, which product unlocks each, game modes: `frontend/lib/game/packCatalog.js`
+- Themed word lists: `frontend/lib/game/themedWords.json` (add `<theme>_easy|medium|hard` groups + a catalog entry = new pack, nothing else to touch)
+- Product ids, ad units, cooldowns, 24 h unlock length: `frontend/lib/appConfig.ts`
+
+Purchases go through RevenueCat (free until $2.5k/month revenue, no server of yours).
+**Convention: every product id has a RevenueCat entitlement with the same identifier.**
+With no keys configured the Store says "unavailable", **nothing is locked**, and ads are
+Google TEST ads, so an unconfigured build can never cost users money or generate
+invalid traffic. On the website nothing is locked unless you set
+`NEXT_PUBLIC_LOCK_PREMIUM_ON_WEB=true` (then locked items say "available in the apps").
+
+Growth loops built in: invite links + native share sheet, a shareable **results card**
+(image with scores, MVP and your URL) on the game-over screen, and the native
+**store-rating prompt** after a win (2+ games played, at most every 60 days).
 
 ## Before you can publish: things only you can do
 
 1. **Accounts**: Google Play Console ($25 once), Apple Developer ($99/yr), AdMob, RevenueCat.
 2. **AdMob**: create an Android app + iOS app, a banner and an interstitial unit for each.
    - Put the *app ids* in `android/app/src/main/res/values/strings.xml` (`admob_app_id`) and `ios/App/App/Info.plist` (`GADApplicationIdentifier`).
-   - Put the *unit ids* in the `NEXT_PUBLIC_ADMOB_*` env vars (see `.env.example`) when running `build:mobile`.
+   - Create a **rewarded** unit per platform too. Put the *unit ids* in the `NEXT_PUBLIC_ADMOB_*` env vars (see `.env.example`) when running `build:mobile`.
    - In AdMob > Privacy & messaging, create the **GDPR** and **US states** messages (the app already shows Google's consent form when required) and, for iOS, the **IDFA explainer**.
    - Paste Google's full `SKAdNetworkItems` list into `Info.plist`.
-3. **RevenueCat**: create products `remove_ads` and `premium_packs` (non-consumable / one-time) in both stores, attach them to entitlements with the same names, set `NEXT_PUBLIC_RC_ANDROID_KEY` / `NEXT_PUBLIC_RC_IOS_KEY`.
+3. **RevenueCat**: create every product id from the table above (non-consumable / one-time) in both stores, attach each to an entitlement with the *same identifier*, set `NEXT_PUBLIC_RC_ANDROID_KEY` / `NEXT_PUBLIC_RC_IOS_KEY`.
 4. **Identity**: set `NEXT_PUBLIC_SUPPORT_EMAIL` on the website deployment (it appears on `/privacy` and `/terms`; a placeholder is shown until you do). If you want a different bundle id than `com.infernowords.app`, change `capacitor.config.ts`, `android/app/build.gradle` (`applicationId`, `namespace`) and the Xcode target **before the first upload** - it is permanent afterwards.
 5. **Icons & splash**: put a 1024x1024 `assets/icon.png` (no transparency for iOS) and run `npx @capacitor/assets generate`.
 6. **Signing**: create an upload keystore in Android Studio (Build > Generate Signed Bundle) and use Play App Signing; on iOS use Xcode automatic signing. Never commit keystores or passwords.
@@ -63,7 +82,8 @@ Built in:
 - [x] Privacy Policy (`/privacy`) and Terms (`/terms`), linked in-app (home footer + Store). Use `https://<site>/privacy` as the policy URL in both consoles.
 - [x] Digital goods sold only via Play Billing / StoreKit (RevenueCat); **Restore purchases** button (App Store 3.1.1).
 - [x] Ad consent: Google UMP form before any ad request; "Ad privacy choices" entry point; iOS ATT prompt with a usage string; ads not child-directed, content rating capped at Teen.
-- [x] Ads never interrupt gameplay, no ads on exit, interstitial cooldown (Play "disruptive ads" policy).
+- [x] Ads never interrupt gameplay, no ads on exit, interstitial cooldown (Play "disruptive ads" policy). Rewarded ads are strictly opt-in and clearly state the reward.
+- [x] Custom packs are user-generated content: covered by the zero-tolerance terms, visible only inside the private room, host-controlled.
 - [x] User-generated content (nicknames, suggestions): zero-tolerance terms, hosts can kick + ban, abuse-report contact (App Store 1.2).
 - [x] No accounts, so no account-deletion flow is required. `android:allowBackup="false"`.
 - [x] Android targetSdk 36; only INTERNET, WAKE_LOCK and AD_ID permissions. iOS: no camera/mic/location usage, `ITSAppUsesNonExemptEncryption=false` (standard TLS/DTLS only).
