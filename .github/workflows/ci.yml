@@ -33,6 +33,8 @@ jobs:
   android:
     name: Android (debug APK)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # publishes the test APK as a release asset
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -54,6 +56,16 @@ jobs:
         with:
           name: inferno-words-debug-apk
           path: frontend/android/app/build/outputs/apk/debug/*.apk
+      # Rolling public download (no GitHub login needed):
+      # https://github.com/<owner>/<repo>/releases/download/latest-apk/inferno-words-debug.apk
+      - name: Publish APK to the "latest-apk" release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp frontend/android/app/build/outputs/apk/debug/app-debug.apk inferno-words-debug.apk
+          gh release delete latest-apk --yes --cleanup-tag || true
+          gh release create latest-apk inferno-words-debug.apk             --prerelease --target "$GITHUB_SHA"             --title "Latest test APK (debug)"             --notes "Automatic debug build of commit $GITHUB_SHA. Test ads only, store disabled. Not for distribution."
 
   ios:
     name: iOS (simulator build, unsigned)
