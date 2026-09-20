@@ -20,3 +20,9 @@ code-simplifier.md
 frontend/.next/
 frontend/out/
 frontend/tsconfig.tsbuildinfo
+
+# Signing material must never be committed
+*.jks
+*.keystore
+*.p12
+*.mobileprovision

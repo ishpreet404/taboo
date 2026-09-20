@@ -67,24 +67,48 @@ later want in-app support, do it with a consumable "Tip" IAP.
    `/.well-known/apple-app-site-association` (iOS) so `https://<site>/?room=CODE` opens
    the app. Until then the links open the website, which works too.
 
-## Store policy checklist
+## Google Play compliance
 
-- [x] No trademarked name: store builds are "Inferno Words". **Do not use the word
-      "Taboo" in the store title, icon, screenshots or keywords.**
-- [x] Privacy Policy (`/privacy`) and Terms (`/terms`), linked from the home screen.
-- [x] No ads, no analytics, no advertising id, no purchases: the simplest possible
-      Data safety / privacy label ("no data collected" apart from what peer-to-peer
-      play inherently shares between players, described in the policy).
-- [x] User-generated content (nicknames, custom packs): zero-tolerance terms, hosts can
-      kick + ban, abuse-report contact (App Store 1.2).
-- [x] Permissions: INTERNET and WAKE_LOCK only. `allowBackup=false`.
-      `ITSAppUsesNonExemptEncryption=false` (standard TLS/DTLS only).
-- [x] Native value beyond a web view (App Store 4.2): share sheet, results card,
-      keep-awake, rating prompt, offline shell, host recovery.
-- [ ] Content rating questionnaires: users can interact. Expect Teen / 12+; do not opt
-      into the Kids/Families programmes.
-- [ ] New personal Play accounts need a closed test with 12 testers for 14 days.
-- [ ] Have the privacy policy and terms reviewed; they are a good-faith template.
+Verified against the published release APK (`aapt2 dump`), 2026-09:
+
+| Policy area | Status | Notes |
+| --- | --- | --- |
+| Target API level | OK | targetSdk 36 / compileSdk 36 (Play requires recent API levels; re-check each August) |
+| 16 KB page size | OK | No native `.so` libraries in the app |
+| Permissions | OK | INTERNET, WAKE_LOCK, VIBRATE only. No sensitive or runtime permissions |
+| Debuggable / cleartext / backup | OK | Release is non-debuggable, HTTPS only, `allowBackup=false`, FileProvider limited to the cache dir |
+| Ads | OK | None. Declare "No ads" |
+| Payments | OK | Nothing is sold. The UPI donate dialog exists on the website only and is never shown in the app |
+| Data safety | OK | No analytics/ads SDKs, no accounts. See the form answers below |
+| Privacy policy | **Action** | `/privacy` is live, but the contact address is a placeholder until you set `NEXT_PUBLIC_SUPPORT_EMAIL` |
+| User-generated content | OK | Nicknames + custom packs: terms with zero tolerance, in-app **Report a player or content**, host kick + ban, leave any time |
+| Intellectual property | OK in-app | Store build shows "Inferno Words" and says "Foul" for rule breaks; no trademarked word in UI. **Do not use "Taboo" in the listing title, description, screenshots or keywords.** The default site URL still contains it: set `NEXT_PUBLIC_WEB_URL` to a neutral domain before launch |
+| In-app review | OK | Uses the current `com.google.android.play:review` library |
+| App icon / listing assets | **Action** | Still the default Capacitor icon. Provide your own 512px icon, feature graphic and screenshots |
+| Signing | **Action** | Add the keystore secrets (above) so the AAB is signed with your upload key |
+| Minimum functionality | OK | Bundled offline shell, native share, results card, keep-awake, host recovery: not a bare website wrapper |
+
+### Play Console forms (answer truthfully)
+
+- **Data safety**: "Does your app collect or share any required user data types?" -> **No**
+  for collection by you. Nicknames and gameplay go device-to-device and are not stored;
+  mention peer-to-peer play in the policy (done). If you later enable word feedback
+  (`NEXT_PUBLIC_FEEDBACK_URL`) declare "Other user-generated content", collected,
+  optional, for app functionality.
+- **Ads**: No. **In-app purchases**: No. **App access**: all functionality available
+  without login.
+- **Content rating (IARC)**: users can interact and share text -> expect Teen / 12+.
+- **Target audience**: 13+. Do **not** include under-13s (that triggers the Families
+  policy).
+- **News / Government / Financial / Health**: No.
+- New personal developer accounts: closed test with **12 testers for 14 days** before
+  production, and developer identity verification.
+
+## App Store notes
+
+Same build, same answers: no tracking (no ATT prompt needed), no purchases, UGC covered by
+terms + report + kick (guideline 1.2), `ITSAppUsesNonExemptEncryption=false`. Requires an
+Apple Developer account and a Mac (or a signing setup in CI).
 
 ## Scaling
 

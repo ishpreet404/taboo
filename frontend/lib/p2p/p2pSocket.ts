@@ -9,6 +9,7 @@
 
 import type { DataConnection, Peer } from 'peerjs'
 import type { HostedRoom } from './host'
+import { acceptHost, forgetHost, randomNonce } from './hostIdentity'
 import { encodeFrames, FrameDecoder, HOST_READY_EVENT, peerIdForRoom, peerOptions } from './shared'
 
 type Handler = (...args: any[]) => void
@@ -84,6 +85,7 @@ export class P2PSocket {
         if (this.link?.roomCode === code) this.send(event, args)
       })
     } else if (event === 'leave-game') {
+      forgetHost(this.link?.roomCode)
       this.enqueue(async () => {
         // When the hosting tab leaves, the room can't outlive it: skip the core's
         // "hand host to the next player" path and close the room (sends 'host-left').
@@ -183,6 +185,9 @@ export class P2PSocket {
       }
     }
 
+    // Typing a code is a fresh trust decision; automatic reconnects keep the pinned host
+    if (reason === 'join-room') forgetHost()
+
     try {
       const link = await this.openRemoteLink(code)
       if (this.closed) return this.teardown(link)
@@ -204,6 +209,8 @@ export class P2PSocket {
     const { Peer } = await import('peerjs')
     const peer = new Peer(peerOptions())
     const decoder = new FrameDecoder()
+    const nonce = randomNonce()
+    let assignedId = ''
 
     try {
       const conn = await new Promise<DataConnection>((resolve, reject) => {
@@ -217,13 +224,20 @@ export class P2PSocket {
           const c = peer.connect(peerIdForRoom(code), {
             reliable: true,
             serialization: 'json',
-            metadata: { clientId: this.id, deviceId: this.deviceId },
+            metadata: { deviceId: this.deviceId, nonce },
           })
           // 'open' fires independently on each side, so the host may not be listening
           // yet. Wait for its hello before sending anything.
-          const onHello = (raw: unknown) => {
-            if (decoder.push(raw)?.e !== HOST_READY_EVENT) return
+          const onHello = async (raw: unknown) => {
+            const hello = decoder.push(raw)
+            if (hello?.e !== HOST_READY_EVENT) return
             c.off('data', onHello)
+            const { id, proof } = hello.a[0] || {}
+            // Must be the host we pinned for this room (or the first one we meet)
+            if (typeof id !== 'string' || !(await acceptHost(code, nonce, proof))) {
+              return fail(Object.assign(new Error('host identity mismatch'), { type: 'untrusted-host' }))
+            }
+            assignedId = id
             clearTimeout(timer)
             peer.off('error', fail)
             resolve(c)
@@ -236,6 +250,8 @@ export class P2PSocket {
 
       const link: Link = { kind: 'remote', roomCode: code, peer, conn }
       let hostSaidGoodbye = false
+      // Our player id in this room is whatever the host assigned to this connection
+      this.id = assignedId
 
       conn.on('data', (raw) => {
         const msg = decoder.push(raw)

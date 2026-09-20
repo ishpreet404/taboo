@@ -3,6 +3,7 @@
 import { Clock, Copy, Edit3, GraduationCap, Handshake, Info, Lock, LogOut, MessageSquare, RefreshCw, Settings, Shield, Shuffle, SkipForward, Trophy as TrophyIcon, Unlock, UserCheck, Users, UserX, X, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
+import { FOUL_TERM } from '@/lib/appConfig'
 import { getMode } from '@/lib/game/packCatalog'
 import { packColor, packDisplayName } from './PackList'
 
@@ -373,7 +374,7 @@ export default function GameScreen() {
 
         // Only show notification to watching teams (NOT to describer's team)
         if (data.newlyConfirmed && !isPlayerOnCurrentTeam) {
-          setGlobalNotification({ message: `"${data.newlyConfirmed}" reported as potential TABOO! 🚫`, type: 'warning' })
+          setGlobalNotification({ message: `"${data.newlyConfirmed}" reported as potential ${FOUL_TERM.toUpperCase()}! 🚫`, type: 'warning' })
           setTimeout(() => setGlobalNotification(null), 3000)
         }
         // Track the taboo word with its points for turn-end voting
@@ -451,13 +452,13 @@ export default function GameScreen() {
       // Show notification
       if (confirmedWords.length > 0) {
         setGlobalNotification({
-          message: `${confirmedWords.length} word${confirmedWords.length !== 1 ? 's' : ''} confirmed as TABOO! 🚫`,
+          message: `${confirmedWords.length} word${confirmedWords.length !== 1 ? 's' : ''} confirmed as ${FOUL_TERM.toUpperCase()}! 🚫`,
           type: 'warning'
         })
         setTimeout(() => setGlobalNotification(null), 3000)
       } else if (failedWords.length > 0) {
         setGlobalNotification({
-          message: `${failedWords.length} taboo report${failedWords.length !== 1 ? 's' : ''} dismissed by vote`,
+          message: `${failedWords.length} ${FOUL_TERM.toLowerCase()} report${failedWords.length !== 1 ? 's' : ''} dismissed by vote`,
           type: 'info'
         })
         setTimeout(() => setGlobalNotification(null), 3000)
@@ -1600,14 +1601,14 @@ export default function GameScreen() {
               <div className="mb-6">
                 <h4 className="text-lg font-semibold mb-3 flex items-center gap-2">
                   <span className="text-orange-400">🚫</span>
-                  Taboo Settings
+                  {FOUL_TERM} Settings
                 </h4>
                 <div className="space-y-3">
                   {/* Taboo Reporting Toggle */}
                   <div className="flex items-center justify-between glass rounded-lg p-4">
                     <div>
-                      <div className="text-sm font-medium">Taboo Reporting</div>
-                      <div className="text-xs text-gray-500">Allow watching team to report taboo words</div>
+                      <div className="text-sm font-medium">{FOUL_TERM} Reporting</div>
+                      <div className="text-xs text-gray-500">Allow the watching team to report rule breaks</div>
                     </div>
                     <label className="relative cursor-pointer">
                       <input
@@ -1629,7 +1630,7 @@ export default function GameScreen() {
                   {/* Taboo Voting Toggle */}
                   <div className={`flex items-center justify-between glass rounded-lg p-4 ${!tabooReporting ? 'opacity-50' : ''}`}>
                     <div>
-                      <div className="text-sm font-medium">Taboo Voting</div>
+                      <div className="text-sm font-medium">{FOUL_TERM} Voting</div>
                       <div className="text-xs text-gray-500">
                         {tabooReporting ? 'All players vote on reported taboos' : 'Enable reporting first'}
                       </div>
@@ -1653,10 +1654,10 @@ export default function GameScreen() {
 
                   <p className="text-xs text-gray-500 text-center">
                     {tabooReporting && tabooVoting
-                      ? 'Reported words go to vote. 60% yes confirms taboo penalty.'
+                      ? 'Reported words go to a vote. 60% yes confirms the penalty.'
                       : tabooReporting
-                        ? 'Reported words are auto-confirmed as taboos.'
-                        : 'Taboo features are disabled.'}
+                        ? 'Reported words are confirmed automatically.'
+                        : 'Reporting is disabled.'}
                   </p>
                 </div>
               </div>
@@ -2056,7 +2057,7 @@ export default function GameScreen() {
                       </div>
                       {tabooReportingEnabled ? (
                         <div className="text-xs sm:text-sm text-gray-500 mt-1.5 sm:mt-2">
-                          Click a word to report if describer used a taboo!
+                          Click a word to report it if the describer broke the rules!
                         </div>
                       ) : (
                         <div className="text-xs sm:text-sm text-gray-500 mt-1.5 sm:mt-2">
@@ -2099,7 +2100,7 @@ export default function GameScreen() {
                             {tabooReportingEnabled && (isConfirmedTaboo || voteCount > 0) && (
                               <div className={`absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${isConfirmedTaboo ? 'bg-orange-500 text-white' : 'bg-orange-500/30 text-orange-300 border border-orange-500/50'
                                 }`}>
-                                {isConfirmedTaboo ? '🚫 TABOO' : `${voteCount} vote${voteCount !== 1 ? 's' : ''}`}
+                                {isConfirmedTaboo ? `🚫 ${FOUL_TERM.toUpperCase()}` : `${voteCount} vote${voteCount !== 1 ? 's' : ''}`}
                               </div>
                             )}
                             <div className="text-center">
@@ -2402,7 +2403,7 @@ export default function GameScreen() {
                           <span
                             key={idx}
                             className="text-xs px-2 py-1 rounded border flex items-center gap-1 bg-green-500/20 text-green-300 border-green-500/40"
-                            title={`Round ${taboo.round} by ${taboo.describer} - Confirmed taboo`}
+                            title={`Round ${taboo.round} by ${taboo.describer} - Confirmed ${FOUL_TERM.toLowerCase()}`}
                           >
                             <span className="text-green-400">✓</span>
                             {taboo.word} ({taboo.points}pts)
@@ -2493,9 +2494,9 @@ export default function GameScreen() {
           >
             <div className="glass-strong rounded-2xl p-6 border-2 border-orange-500/50 bg-orange-500/5 shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
               <div className="text-center mb-6">
-                <div className="text-2xl font-bold text-orange-300 mb-2">🚫 Taboo Voting</div>
+                <div className="text-2xl font-bold text-orange-300 mb-2">🚫 {FOUL_TERM} Voting</div>
                 <div className="text-sm text-gray-300 mb-3">
-                  Was this word used incorrectly? Vote ✓ for Taboo or ✗ for Not Taboo. 60% yes votes needed to confirm.
+                  Was this word used incorrectly? Vote ✓ if it broke the rules or ✗ if it was fine. 60% yes votes needed to confirm.
                 </div>
                 <div className="flex items-center justify-center gap-2 text-lg font-semibold text-orange-400">
                   <Clock className="w-5 h-5" />
@@ -2556,14 +2557,14 @@ export default function GameScreen() {
                                   <button
                                     onClick={() => voteTabooRoundEnd(tabooWord.word, 'yes')}
                                     className="px-4 py-2 bg-green-500/20 hover:bg-green-500/30 border border-green-500/50 rounded-lg text-xl font-bold text-green-400 transition-colors"
-                                    title="Yes, this was taboo"
+                                    title="Yes, this broke the rules"
                                   >
                                     ✓
                                   </button>
                                   <button
                                     onClick={() => voteTabooRoundEnd(tabooWord.word, 'no')}
                                     className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 rounded-lg text-xl font-bold text-red-400 transition-colors"
-                                    title="No, this was not taboo"
+                                    title="No, this was fine"
                                   >
                                     ✗
                                   </button>
@@ -2575,7 +2576,7 @@ export default function GameScreen() {
                                     ? 'bg-green-500/30 text-green-300'
                                     : 'bg-red-500/30 text-red-300'
                                   }`}>
-                                  {isFinalized ? '✓ CONFIRMED TABOO' : myVote === 'yes' ? '✓ Voted Yes' : '✗ Voted No'}
+                                  {isFinalized ? `✓ CONFIRMED ${FOUL_TERM.toUpperCase()}` : myVote === 'yes' ? '✓ Voted Yes' : '✗ Voted No'}
                                 </div>
                               )}
                             </div>

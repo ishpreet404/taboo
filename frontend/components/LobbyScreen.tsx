@@ -1,6 +1,7 @@
 'use client'
 
 import { AnimatePresence, motion } from 'framer-motion'
+import { FOUL_TERM } from '@/lib/appConfig'
 import { shareInvite } from '@/lib/native/device'
 import { Book, Check, ChevronDown, Copy, Crown, Edit3, Flag, GraduationCap, Lock, LogOut, Play, PlayCircle, Share2, Shuffle, X } from 'lucide-react'
 import CustomPackModal from './CustomPackModal'
@@ -422,7 +423,7 @@ export default function LobbyScreen() {
               {/* Taboo features (mobile) */}
               <div className="w-full flex flex-col items-center">
                 <div className="flex items-center gap-3">
-                  <span className="text-sm text-gray-400 whitespace-nowrap">Taboo Features:</span>
+                  <span className="text-sm text-gray-400 whitespace-nowrap">{FOUL_TERM} Rules:</span>
                   <div className="flex items-center gap-3">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <div className="relative">
@@ -456,7 +457,7 @@ export default function LobbyScreen() {
                     ? 'Reporting + voting enabled — confirmed taboos deduct points.'
                     : tabooReporting
                       ? 'Reporting enabled — reported words deduct points.'
-                      : 'Taboo features disabled.'}
+                      : '{FOUL_TERM} rules disabled.'}
                 </p>
               </div>
 
@@ -684,7 +685,7 @@ export default function LobbyScreen() {
               {/* Right: Taboo Features + description under it */}
               <div className="flex flex-col items-center md:items-start justify-self-center md:justify-self-start">
                 <div className="flex items-center gap-3">
-                  <span className="text-sm text-gray-400 whitespace-nowrap">Taboo Features:</span>
+                  <span className="text-sm text-gray-400 whitespace-nowrap">{FOUL_TERM} Rules:</span>
                   <div className="flex items-center gap-3">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <div className="relative">
@@ -718,7 +719,7 @@ export default function LobbyScreen() {
                     ? 'Reporting + voting enabled — confirmed taboos deduct points.'
                     : tabooReporting
                       ? 'Reporting enabled — reported words deduct points.'
-                      : 'Taboo features disabled.'}
+                      : '{FOUL_TERM} rules disabled.'}
                 </p>
 
                 {/* Team Division button moved under Taboo toggles */}

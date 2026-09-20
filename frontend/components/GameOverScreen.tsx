@@ -1,6 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
+import { FOUL_TERM } from '@/lib/appConfig'
 import { getMode } from '@/lib/game/packCatalog'
 import { hapticTap, isNative } from '@/lib/native/device'
 import { shareResultsCard } from '@/lib/native/resultsCard'
@@ -101,7 +102,7 @@ export default function GameOverScreen() {
             <p className="text-2xl text-gray-300">{winner.effectiveScore} Points</p>
             {winner.tabooDeduction > 0 && (
               <p className="text-sm text-orange-400 mt-1">
-                ({winner.score} - {winner.tabooDeduction} taboo penalty)
+                ({winner.score} - {winner.tabooDeduction} {FOUL_TERM.toLowerCase()} penalty)
               </p>
             )}
           </>
@@ -163,10 +164,10 @@ export default function GameOverScreen() {
               {team.tabooDeduction > 0 ? (
                 <div className="flex items-center gap-2 text-sm bg-orange-500/10 border border-orange-500/30 rounded-lg px-3 py-2 mb-4">
                   <AlertTriangle className="w-4 h-4 text-orange-400" />
-                  <span className="text-orange-400">Taboo Penalty: -{team.tabooDeduction} pts</span>
+                  <span className="text-orange-400">{FOUL_TERM} Penalty: -{team.tabooDeduction} pts</span>
                 </div>
               ) : (
-                <div className="text-sm text-gray-500 mb-4">No taboo penalties</div>
+                <div className="text-sm text-gray-500 mb-4">No {FOUL_TERM.toLowerCase()} penalties</div>
               )}
               <div className="space-y-2">
                 {team.players.map((player) => (

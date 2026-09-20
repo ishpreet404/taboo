@@ -107,6 +107,38 @@ const before = inbox.a.length
 for (let i = 0; i < 500; i++) players[2].send('timer-update', { roomCode: 'TEST42', timeRemaining: 10 })
 assert.ok(inbox.a.length - before <= 45, 'flood was rate limited')
 
+// --- Authorization regressions (from the security audit) ----------------------
+const room42 = () => core.gameRooms.get('TEST42')
+const outsider = client('outsider') // connected, but holds no seat in the room
+const teamBefore = room42().gameState.currentTeamIndex
+for (const ev of ['next-turn', 'end-turn', 'skip-turn', 'start-turn']) outsider.send(ev, { roomCode: 'TEST42' })
+outsider.send('sync-game-state', { roomCode: 'TEST42', gameState: {} })
+assert.ok(room42().gameState.teams && room42().gameState.currentTeamIndex === teamBefore, 'outsiders cannot drive or overwrite the game')
+outsider.send('submit-word-feedback', { roomCode: 'TEST42', word: 'x', feedback: 'spam' })
+outsider.send('suggest-word', { roomCode: 'TEST42', word: 'spam' })
+assert.equal((room42().wordFeedback || []).length + (room42().suggestedWords || []).length, 0, 'outsiders cannot write to a room')
+outsider.send('report-taboo', { roomCode: 'TEST42', word: dealtWord.word, voter: 'x1', voterTeam: 99 })
+assert.ok(!room42().gameState.tabooVotes?.[dealtWord.word], 'outsiders cannot vote')
+io.removeClient('outsider')
+
+// A seated player cannot grab the host role mid-game...
+players[1].send('player-play-again', { roomCode: 'TEST42' })
+assert.equal(room42().host, 'host', 'play-again cannot steal host while a game is running')
+// ...cannot join a team that does not exist, or rename one into a giant sparse array
+players[1].send('join-team', { roomCode: 'TEST42', teamIndex: 2e7 })
+assert.ok(room42().players.every((p) => p.team === null || p.team < 2), 'team index is validated')
+host.send('rename-team', { roomCode: 'TEST42', teamIndex: 2e7, newName: 'x' })
+host.send('rename-team', { roomCode: 'TEST42', teamIndex: 0, newName: 'N'.repeat(500) })
+assert.ok((room42().teamNames?.length || 0) <= 3 && (room42().gameState.teams[0].name || '').length <= 30, 'team names are bounded')
+// ...and feedback is attributed to the seat, trimmed and capped
+for (let i = 0; i < 400; i++) players[0].send('submit-word-feedback', { roomCode: 'TEST42', playerName: 'Forged', word: 'w' + i, feedback: 'z'.repeat(5000) })
+assert.ok(room42().wordFeedback.length <= 300 && room42().wordFeedback[0].playerName === 'P0' && room42().wordFeedback[0].feedback.length <= 200)
+// Prototype-polluting names never get a seat
+const proto = client('proto')
+proto.send('join-room', { roomCode: 'TEST42', playerName: '__proto__', sessionId: 's-proto' })
+assert.ok(!room42().players.some((p) => p.id === 'proto') && ({}).points === undefined, 'no prototype pollution via names')
+io.removeClient('proto')
+
 // One-to-one messages rely on every socket sitting in a room named after its id
 io.to('b').emit('direct-test', { ok: true })
 assert.ok(last('b', 'direct-test') && !last('a', 'direct-test'), 'io.to(socketId) reaches only that socket')
@@ -127,7 +159,7 @@ assert.ok(restored.wordPools._packDatabase.length > 0 && !Object.keys(restored.w
 assert.equal(restored.players.length, 4)
 assert.equal(restored.customPack.words.length, 40)
 assert.ok(!Object.keys(restored).includes('customPack'))
-host.send('sync-game-state', { roomCode: 'TEST42' })
+host.send('timer-update', { roomCode: 'TEST42', timeRemaining: 5 })
 
 // Dropping a client fires the core's disconnect handling (grace period)
 io.removeClient('c')

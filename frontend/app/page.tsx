@@ -1,17 +1,20 @@
 'use client'
 
+import ErrorBoundary from '@/components/ErrorBoundary'
 import { GameProvider, useGame } from '@/components/GameContext'
 import GameOverScreen from '@/components/GameOverScreen'
 import GameScreen from '@/components/GameScreen'
 import LobbyScreen from '@/components/LobbyScreen'
+import ReportModal from '@/components/ReportModal'
 import RoomScreen from '@/components/RoomScreen'
 import { ThemeProvider } from '@/components/ThemeContext'
 import { setKeepAwake } from '@/lib/native/device'
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 function GameContent() {
   const { currentScreen, notifications, isReconnecting } = useGame()
+  const [showReport, setShowReport] = useState(false)
   // A sleeping screen drops the player (or, for the host, freezes the room)
   useEffect(() => {
     void setKeepAwake(currentScreen !== 'room')
@@ -40,7 +43,17 @@ function GameContent() {
         {currentScreen === 'lobby' && <LobbyScreen />}
         {currentScreen === 'game' && <GameScreen />}
         {currentScreen === 'gameover' && <GameOverScreen />}
+
+        {/* Reporting is available wherever other players' names and words are visible */}
+        {currentScreen !== 'room' && (
+          <div className="mt-6 pb-2 text-center">
+            <button onClick={() => setShowReport(true)} className="text-xs text-gray-400 hover:text-gray-200 underline underline-offset-4">
+              Report a player or content
+            </button>
+          </div>
+        )}
       </div>
+      <ReportModal open={showReport} onClose={() => setShowReport(false)} />
 
       {/* Global notification display - stacked */}
       <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 flex flex-col gap-3 w-11/12 sm:w-auto items-center pointer-events-none">
@@ -76,9 +89,11 @@ function GameContent() {
 export default function Home() {
   return (
     <ThemeProvider>
-      <GameProvider>
-        <GameContent />
-      </GameProvider>
+      <ErrorBoundary>
+        <GameProvider>
+          <GameContent />
+        </GameProvider>
+      </ErrorBoundary>
     </ThemeProvider>
   )
 }

@@ -1525,14 +1525,28 @@ const RATE_LIMIT = { windowMs: 1000, maxEvents: 40 }; // per socket
 const MAX_NAME_LENGTH = 20;
 
 // Player-chosen names are shown to everyone in the room
+const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function cleanName(raw) {
 	if (typeof raw !== "string") return "";
-	return raw
+	const name = raw
 		.replace(/[\u0000-\u001f\u007f<>]/g, "")
 		.replace(/\s+/g, " ")
 		.trim()
 		.slice(0, MAX_NAME_LENGTH);
+	return FORBIDDEN_KEYS.has(name.toLowerCase()) ? "" : name;
 }
+
+// Free text from clients that gets stored or re-broadcast
+function cleanText(raw, maxLength) {
+	if (typeof raw !== "string") return "";
+	return raw.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, maxLength);
+}
+
+// Events a socket may send without (yet) having a seat in the room it names
+const PRE_SEAT_EVENTS = new Set(["create-room", "join-room", "reconnect-session", "disconnect"]);
+const MAX_ROOMS = 5000; // per process (server mode); a P2P host only ever has one
+const MAX_STORED_ITEMS = 300; // feedback / suggestions / wrong guesses per room
 
 // Wraps socket.on so that, for every client event:
 //  - the payload is always a plain object (handlers destructure it; "undefined"
@@ -1567,6 +1581,14 @@ function hardenSocket(socket) {
 							typeof payload.sessionId === "string" ? payload.sessionId.slice(0, 80) : null;
 					}
 				}
+
+				// Knowing a room code is not enough: every other event must come from a
+				// socket that holds a seat in that room. Handlers can then rely on
+				// "the sender is a player here" and look the player up by socket.id.
+				if (!PRE_SEAT_EVENTS.has(event)) {
+					const room = gameRooms.get(args[0].roomCode);
+					if (!room || !room.players.some((p) => p.id === socket.id)) return;
+				}
 			}
 			try {
 				return handler(...args);
@@ -1599,7 +1621,21 @@ function onConnection(socket) {
 			socket.emit("error", { message: "Please enter a name" });
 			return;
 		}
-		const roomCode = (roomCodeOverride || generateRoomCode)();
+		// A socket hosts at most one room: creating another replaces its previous one
+		for (const [existingCode, existingRoom] of gameRooms) {
+			if (existingRoom.host === socket.id) {
+				gameRooms.delete(existingCode);
+				unregisterCustomPack(existingCode);
+			}
+		}
+		if (gameRooms.size >= MAX_ROOMS) {
+			socket.emit("error", { message: "The server is full. Please try again later." });
+			return;
+		}
+		let roomCode = (roomCodeOverride || generateRoomCode)();
+		for (let i = 0; i < 5 && !roomCodeOverride && gameRooms.has(roomCode); i++) {
+			roomCode = generateRoomCode();
+		}
 		const wordPack =
 			data.wordPack && WORD_PACKS[data.wordPack] ? data.wordPack : "standard";
 		const room = {
@@ -1782,6 +1818,15 @@ function onConnection(socket) {
 		// Check if player already exists (reconnection)
 		const existingPlayer = room.players.find((p) => p.name === playerName);
 
+		if (!playerName) {
+			socket.emit("error", { message: "Please enter a name" });
+			return;
+		}
+		if (room.players.some((p) => p.id === socket.id && p.name !== playerName)) {
+			socket.emit("error", { message: "You are already in this room" });
+			return;
+		}
+
 		if (existingPlayer && !ownsSeat(existingPlayer, sessionId)) {
 			socket.emit("error", {
 				message: "That name is already taken in this room. Please pick another.",
@@ -1935,6 +1980,8 @@ function onConnection(socket) {
 	socket.on("join-team", (data) => {
 		const { roomCode, teamIndex } = data;
 		const room = gameRooms.get(roomCode);
+		const teamLimit = Math.max(room?.teamCount || 2, room?.gameState?.teamCount || 0);
+		if (!Number.isInteger(teamIndex) || teamIndex < 0 || teamIndex >= teamLimit) return;
 
 		if (room) {
 			// Check if team switching is locked: allow new joiners (team === null) to join teams,
@@ -2140,9 +2187,15 @@ function onConnection(socket) {
 
 	// Receive suggested words from clients
 	socket.on("suggest-word", (data) => {
-		const { roomCode, playerName, word, difficulty, timestamp } = data || {};
+		const { roomCode } = data || {};
 		const room = gameRooms.get(roomCode);
 		if (!room) return;
+		// Identity comes from the seat; text is bounded; the list cannot grow forever
+		const playerName = room.players.find((p) => p.id === socket.id).name;
+		const word = cleanText(data.word, 60);
+		const difficulty = cleanText(data.difficulty, 12);
+		const timestamp = new Date().toISOString();
+		if (!word || (room.suggestedWords || []).length >= MAX_STORED_ITEMS) return;
 
 		// Ensure suggestedWords array exists
 		if (!room.suggestedWords) room.suggestedWords = [];
@@ -2184,11 +2237,15 @@ function onConnection(socket) {
 
 	// Submit word feedback
 	socket.on("submit-word-feedback", (data) => {
-		const { roomCode, playerName, word, difficulty, feedback, timestamp } =
-			data;
+		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
+		const playerName = room?.players.find((p) => p.id === socket.id).name;
+		const word = cleanText(data.word, 60);
+		const difficulty = cleanText(data.difficulty, 12);
+		const feedback = cleanText(data.feedback, 200);
+		const timestamp = new Date().toISOString();
 
-		if (room) {
+		if (room && word && (room.wordFeedback || []).length < MAX_STORED_ITEMS) {
 			// Initialize wordFeedback array if it doesn't exist
 			if (!room.wordFeedback) {
 				room.wordFeedback = [];
@@ -2251,6 +2308,8 @@ function onConnection(socket) {
 				tabooVoting: room.tabooVoting || false, // Default disabled
 				confirmedTaboosByTeam: {}, // Track taboo point deductions per team: { teamIndex: totalPoints }
 			};
+
+			room.playAgainHostAssigned = false;
 
 			// Game mode: the catalog is authoritative, not whatever numbers the client sent
 			const mode = catalog.getMode(room.gameMode || gameState.mode);
@@ -2319,15 +2378,8 @@ function onConnection(socket) {
 	});
 
 	// Sync game state
-	socket.on("sync-game-state", (data) => {
-		const { roomCode, gameState } = data;
-		const room = gameRooms.get(roomCode);
-
-		if (room) {
-			room.gameState = gameState;
-			io.to(roomCode).emit("game-state-updated", { gameState });
-		}
-	});
+	// ("sync-game-state" used to let a client replace the whole game state. No client
+	// sends it, so it is gone rather than guarded.)
 
 	// Start turn - generate words on server
 	socket.on("start-turn", (data) => {
@@ -2336,6 +2388,8 @@ function onConnection(socket) {
 
 		if (room && room.gameState) {
 			const gs = room.gameState;
+			const starter = room.players.find((p) => p.id === socket.id);
+			if (starter.team !== gs.currentTeamIndex && !isAdmin(room, socket.id)) return;
 
 			// Prevent rapid duplicate processing of next-turn (clients may emit twice)
 			// If the last next-turn was processed less than 800ms ago, ignore this call.
@@ -2623,11 +2677,16 @@ function onConnection(socket) {
 
 	// Wrong guess
 	socket.on("wrong-guess", (data) => {
-		const { roomCode, word, guesser } = data;
+		const { roomCode } = data;
 		const room = gameRooms.get(roomCode);
+		const word = cleanText(data.word, 60);
 
-		if (room && room.gameState) {
+		if (room && room.gameState && word) {
 			const gs = room.gameState;
+			const sender = room.players.find((p) => p.id === socket.id);
+			if (sender.team !== gs.currentTeamIndex) return;
+			const guesser = sender.name;
+			if ((gs.currentTurnWrongGuesses || []).length >= MAX_STORED_ITEMS) return;
 
 			// Initialize wrong guesses tracking if not exists
 			if (!gs.currentTurnWrongGuesses) {
@@ -2648,11 +2707,18 @@ function onConnection(socket) {
 
 	// Report taboo - watchers can report if describer used taboo word
 	socket.on("report-taboo", (data) => {
-		const { roomCode, word, voter, voterTeam } = data;
+		const { roomCode, word } = data;
 		const room = gameRooms.get(roomCode);
 
 		if (room && room.gameState) {
 			const gs = room.gameState;
+			// The reporter is whoever sent this (never a name from the payload), must be
+			// watching rather than playing, and can only report a word that is in play
+			const reporter = room.players.find((p) => p.id === socket.id);
+			const voter = reporter.name;
+			const voterTeam = reporter.team;
+			if (voterTeam === null || voterTeam === undefined || voterTeam === gs.currentTeamIndex) return;
+			if (!(gs.currentWords || []).some((w) => w.word === word)) return;
 
 			// Check if taboo reporting is enabled
 			if (room.tabooReporting === false) {
@@ -3019,12 +3085,18 @@ function onConnection(socket) {
 
 	// Handle round-end taboo voting
 	socket.on("round-end-taboo-vote", (data) => {
-		const { roomCode, word, voter, voteType } = data;
+		const { roomCode, word, voteType } = data;
 		const room = gameRooms.get(roomCode);
 
 		if (room && room.gameState && room.gameState.pendingTabooVoting) {
 			const voting = room.gameState.pendingTabooVoting;
 			const gs = room.gameState;
+			const voter = room.players.find((p) => p.id === socket.id).name;
+			if (voteType !== "yes" && voteType !== "no") return;
+			const onBallot = (voting.words || voting.pendingTabooWords || []).some(
+				(w) => (w && w.word ? w.word : w) === word,
+			);
+			if (!onBallot && !Object.prototype.hasOwnProperty.call(voting.votes || {}, word)) return;
 
 			// Initialize votes for this word if not exists (now has yes and no arrays)
 			if (!voting.votes[word]) {
@@ -4367,9 +4439,12 @@ function onConnection(socket) {
 
 	// Admin: Rename team (host or co-admin)
 	socket.on("rename-team", (data) => {
-		const { roomCode, teamIndex, newName } = data || {};
+		const { roomCode, teamIndex } = data || {};
+		const newName = cleanText(data.newName, 30);
 		const room = gameRooms.get(roomCode);
 		if (!room) return;
+		const teamLimit = Math.max(room.teamCount || 2, room.gameState?.teamCount || 0);
+		if (!Number.isInteger(teamIndex) || teamIndex < 0 || teamIndex >= teamLimit) return;
 
 		// Only allow host, co-admin, or team captain (for their own team)
 		const player = room.players.find((p) => p.id === socket.id);
@@ -4452,7 +4527,8 @@ function onConnection(socket) {
 		player.isCaptain = false;
 
 		// If no one has been assigned as the play-again host yet, assign the first requester
-		if (!room.playAgainHostAssigned) {
+		const gameFinished = !room.started && room.gameState && room.gameState.gameStarted === false;
+		if (!room.playAgainHostAssigned && gameFinished) {
 			room.host = socket.id;
 			room.playAgainHostAssigned = true;
 			console.log(
@@ -4505,14 +4581,6 @@ function onConnection(socket) {
 		}
 	});
 
-	socket.on("chat-message", (data) => {
-		const { roomCode, message, playerName } = data;
-		io.to(roomCode).emit("chat-message-received", {
-			message,
-			playerName,
-			timestamp: Date.now(),
-		});
-	});
 
 	// Disconnect
 	socket.on("disconnect", () => {

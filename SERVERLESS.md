@@ -55,11 +55,22 @@ host and redeploy.
 - **Words live on the host's device.** Only the host downloads the word
   database, but a host who opens dev tools could peek. Fine for friends.
 - **Kick bans are per browser** (session id) instead of per IP.
-- **Trust model.** The host's device is the referee. The core validates every event
-  (sender, team, dealt word, point cap), rate-limits each connection, caps message
-  sizes and player counts, and never sends other players' session ids, upcoming words
-  or ban lists over the wire. What it cannot stop is a *host* cheating in their own
-  room (they hold the words) - the same as a friend peeking at the cards.
+- **Trust model.** The host's device is the referee.
+  - Every event except create/join/reconnect must come from a socket that holds a seat
+    in that room; knowing a room code alone gives no power over it.
+  - Identity always comes from the connection, never from payload fields (guesser,
+    voter, feedback author). Seats are bound to a private session id.
+  - Connection ids are assigned by the host, so a player cannot connect "as" someone
+    else. Guesses are checked against the dealt words and their point values.
+  - Hosts sign a nonce with a per-room ECDSA key; joiners pin that key on first join,
+    so nobody can pose as the host while the real one is reloading.
+  - Rate limits, message-size caps, a player cap and bounded lists stop flooding.
+  - Never sent over the wire: upcoming words, word pools, custom pack contents, ban
+    lists, other players' session ids.
+  - Known limits: a *host* can cheat in their own room (they hold the words), and
+    guess matching happens on the guesser's device, so a modified client could read
+    the words in play. Both are "friend peeking at the cards" problems, acceptable
+    for private rooms; public matchmaking would need server-side matching.
 - **Strict networks.** WebRTC needs STUN/TURN to cross NATs. PeerJS ships free
   defaults, which cover most home/mobile networks. If some players can't
   connect, add your own TURN server (Cloudflare Calls and metered.ca have free

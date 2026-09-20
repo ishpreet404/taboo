@@ -4,6 +4,7 @@
 import Peer, { DataConnection } from 'peerjs'
 import { attachGameServer } from '../game/gameCore'
 import { HostIO, HostSocket, Deliver } from './hostIO'
+import { createHostIdentity, HostIdentity, proveIdentity } from './hostIdentity'
 import { encodeFrames, FrameDecoder, HOST_READY_EVENT, peerIdForRoom, peerOptions, sendFeedbackRows } from './shared'
 
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -66,6 +67,9 @@ interface StoredSnapshot {
   roomCode: string
   savedAt: number
   room: string
+  // The host's signing key travels with the snapshot so a resumed room is still
+  // recognised by players who pinned it (see hostIdentity.ts)
+  identity: HostIdentity | null
 }
 
 function readSnapshot(): StoredSnapshot | null {
@@ -101,9 +105,10 @@ export interface HostedRoom {
   suspend: () => void
 }
 
-function serveRoom(peer: Peer, roomCode: string, localId: string, deviceId: string, deliverLocal: Deliver): HostedRoom {
+function serveRoom(peer: Peer, roomCode: string, localId: string, deviceId: string, deliverLocal: Deliver, identity: HostIdentity | null): HostedRoom {
   const gameIO = getIO()
   const remoteIds = new Set<string>()
+  let nextConnection = 0
   let closed = false
   let snapshotTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -113,7 +118,7 @@ function serveRoom(peer: Peer, roomCode: string, localId: string, deviceId: stri
     try {
       const room = core?.exportRoom(roomCode)
       if (!room) return clearSnapshot() // room ended inside the core
-      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ roomCode, savedAt: Date.now(), room } as StoredSnapshot))
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ roomCode, savedAt: Date.now(), room, identity } as StoredSnapshot))
     } catch {
       // storage full/unavailable: recovery is best-effort
     }
@@ -123,15 +128,17 @@ function serveRoom(peer: Peer, roomCode: string, localId: string, deviceId: stri
   }
 
   peer.on('connection', (conn: DataConnection) => {
-    const clientId: string = conn.metadata?.clientId || conn.peer
+    // The HOST picks every connection's socket id. Player ids are visible to the whole
+    // room, so letting clients choose theirs would let one player connect "as" another
+    // (or as the host) and inherit that seat.
+    const clientId = `r${++nextConnection}_${Math.random().toString(36).slice(2, 10)}`
     const clientDevice: string = conn.metadata?.deviceId || conn.peer
-    // Nobody remote may speak as the host's own player
-    if (clientId === localId || typeof clientId !== 'string' || clientId.length > 64 || typeof clientDevice !== 'string' || clientDevice.length > 80 || remoteIds.size >= MAX_REMOTE_PLAYERS) {
+    if (typeof clientDevice !== 'string' || clientDevice.length > 80 || remoteIds.size >= MAX_REMOTE_PLAYERS) {
       conn.close()
       return
     }
 
-    conn.on('open', () => {
+    conn.on('open', async () => {
       remoteIds.add(clientId)
       const socket = gameIO.addClient(clientId, clientDevice, (event, args) => {
         if (!conn.open) return
@@ -151,7 +158,9 @@ function serveRoom(peer: Peer, roomCode: string, localId: string, deviceId: stri
       })
       // Errors (e.g. one oversized message) are not a disconnect; 'close' is.
       conn.on('error', (err) => console.warn('[p2p host] connection error', err))
-      conn.send({ e: HOST_READY_EVENT, a: [] })
+      // Hello: the id we assigned, plus proof that we are the host they pinned
+      const proof = await proveIdentity(identity, conn.metadata?.nonce)
+      if (conn.open) conn.send({ e: HOST_READY_EVENT, a: [{ id: clientId, proof }] })
     })
   })
 
@@ -214,10 +223,11 @@ export async function hostRoom(localId: string, deviceId: string, deliverLocal: 
 
   clearSnapshot()
   getIO()
+  const identity = await createHostIdentity()
   // The core asks for a room code inside create-room; hand it the one we claimed.
   // The facade sends create-room right after this resolves.
   pendingRoomCode = roomCode
-  return serveRoom(peer, roomCode, localId, deviceId, deliverLocal)
+  return serveRoom(peer, roomCode, localId, deviceId, deliverLocal, identity)
 }
 
 /** Called by the facade once the local create-room has been delivered. */
@@ -259,5 +269,5 @@ export async function resumeRoom(roomCode: string, localId: string, deviceId: st
     gameIO.removeClient(player.id)
   }
 
-  return serveRoom(peer, roomCode, localId, deviceId, deliverLocal)
+  return serveRoom(peer, roomCode, localId, deviceId, deliverLocal, snapshot.identity || null)
 }
