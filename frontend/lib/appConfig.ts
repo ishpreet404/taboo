@@ -22,6 +22,10 @@ export const PUBLISHER_NAME = env(process.env.NEXT_PUBLIC_PUBLISHER_NAME, 'Ishpr
 // Public website. Native apps use it for invite links and legal pages.
 export const WEB_URL = env(process.env.NEXT_PUBLIC_WEB_URL, 'https://taboo-inferno.vercel.app').replace(/\/$/, '')
 
+// The published Android app. The website promotes it (components/AppPromo.tsx).
+export const STORE_APP_NAME = LEGAL_APP_NAME
+export const PLAY_STORE_URL = env(process.env.NEXT_PUBLIC_PLAY_STORE_URL, 'https://play.google.com/store/apps/details?id=com.dontsayit.app')
+
 // ---------------------------------------------------------------------------
 // Support
 // ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 'use client'
 
+import AppPromo from '@/components/AppPromo'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import { GameProvider, useGame } from '@/components/GameContext'
 import GameOverScreen from '@/components/GameOverScreen'
@@ -54,6 +55,7 @@ function GameContent() {
         )}
       </div>
       <ReportModal open={showReport} onClose={() => setShowReport(false)} />
+      {currentScreen === 'room' && <AppPromo />}
 
       {/* Global notification display - stacked */}
       <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 flex flex-col gap-3 w-11/12 sm:w-auto items-center pointer-events-none">
