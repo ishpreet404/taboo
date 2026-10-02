@@ -10,7 +10,7 @@ const DISMISS_KEY = 'iw_app_promo_dismissed_at'
 const SNOOZE_MS = 7 * 24 * 60 * 60 * 1000 // ask again a week after "not now"
 const SHOW_AFTER_MS = 2500
 
-// "Get the app" notification for website visitors. Shown on the home screen only
+// "Get the app" pop-up (centred) for website visitors. Shown on the home screen only
 // (never during a game), never inside the app itself, and not on iPhones/iPads
 // since there is no iOS app yet. Dismissing it snoozes it for a week.
 export default function AppPromo() {
@@ -41,12 +41,21 @@ export default function AppPromo() {
     <AnimatePresence>
       {visible && (
         <motion.div
-          initial={{ opacity: 0, y: 40 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 40 }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={dismiss}
+          className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 p-4"
+        >
+        <motion.div
+          initial={{ scale: 0.9, y: 10 }}
+          animate={{ scale: 1, y: 0 }}
+          exit={{ scale: 0.9, y: 10 }}
+          onClick={(e) => e.stopPropagation()}
           role="dialog"
+          aria-modal="true"
           aria-label={`Get the ${STORE_APP_NAME} app`}
-          className="fixed bottom-4 left-1/2 z-[150] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 glass-strong rounded-2xl border border-purple-500/40 p-4 shadow-2xl"
+          className="w-full max-w-md glass-strong rounded-2xl border border-purple-500/40 p-5 shadow-2xl"
         >
           <div className="flex items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -73,6 +82,7 @@ export default function AppPromo() {
               <Download className="w-4 h-4" /> Install
             </a>
           </div>
+        </motion.div>
         </motion.div>
       )}
     </AnimatePresence>
