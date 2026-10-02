@@ -1,10 +1,10 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { APP_NAME, PUBLISHER_NAME } from '@/lib/appConfig'
+import { APP_NAME, PLAY_STORE_URL, PUBLISHER_NAME } from '@/lib/appConfig'
 import { PACKS } from '@/lib/game/packCatalog'
 import { isNative, onInviteLink, roomCodeFromUrl } from '@/lib/native/device'
-import { ChevronDown, Heart, Users, Wifi, WifiOff } from 'lucide-react'
+import { ChevronDown, Download, Heart, Users, Wifi, WifiOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useGame } from './GameContext'
 import DonateModal from './DonateModal'
@@ -118,6 +118,18 @@ export default function RoomScreen() {
               <Users className="w-5 h-5" />
               Join Existing Room
             </button>
+            {/* Website only: the app itself doesn't need a link to its own store page */}
+            {canDonate && (
+              <a
+                href={PLAY_STORE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-3 md:py-4 px-6 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 rounded-xl font-semibold text-white transition-all transform hover:scale-105 flex items-center justify-center gap-3 text-sm md:text-base"
+              >
+                <Download className="w-5 h-5" />
+                Get the app on Google Play
+              </a>
+            )}
             {canDonate && (
               <button
                 onClick={() => setShowDonate(true)}
